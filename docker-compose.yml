@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: artifact
+      POSTGRES_PASSWORD: artifact
+      POSTGRES_DB: artifact_repo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U artifact -d artifact_repo"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://artifact:artifact@db:5432/artifact_repo
+      JWT_SECRET: dev-only-secret-change-me-0123456789abcdef
+      STORAGE_PATH: /data/storage
+      CORS_ORIGINS: http://localhost:5173
+      INITIAL_ADMIN_LOGIN: admin
+      INITIAL_ADMIN_PASSWORD: admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app        # hot-reload кода
+      - blobstorage:/data/storage     # блобы LocalStorageProvider
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      # Vite dev-proxy направляет /api, /hosted, /proxy на этот адрес
+      VITE_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  blobstorage:
