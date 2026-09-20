@@ -12,8 +12,18 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 60 * 8
 
+    # Провайдер блоб-хранилища: "local" (диск одной ноды) или "minio" (общий склад, S3 API)
+    storage_provider: str = "local"
+
     # Куда LocalStorageProvider складывает блобы
     storage_path: str = "./storage"
+
+    # Настройки MinioStorageProvider
+    minio_endpoint: str = "http://localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "artifacts"
+    minio_region: str = "us-east-1"
 
     # Учётка администратора, создаваемая при первом старте
     initial_admin_login: str = "admin"

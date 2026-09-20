@@ -124,10 +124,17 @@ READ/WRITE на конкретный репозиторий.
 ## Архитектура хранилища
 
 Бизнес-логика работает только с интерфейсом `IStorageProvider`
-(`upload_file`, `download_file`, `exists`, `delete_file`). Провайдер выдаётся
-через DI-функцию `app/storage/__init__.py::get_storage()`. Чтобы перейти на
-MinIO/S3, достаточно реализовать `MinioStorageProvider(IStorageProvider)` и
-вернуть его из `get_storage()` — npm-роуты и модели не меняются.
+(`upload_file`, `download_file`, `exists`, `delete_file`). Провайдер выбирается
+переменной окружения `STORAGE_PROVIDER`:
+
+- `minio` (в docker-compose по умолчанию) — общее S3-хранилище
+  (`app/storage/minio.py`): все ноды бэкенда видят одни и те же файлы,
+  это обязательное условие горизонтального масштабирования. Загрузка потоковая
+  (multipart), недокачанные файлы не становятся видимыми.
+  Настройки: `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`,
+  `MINIO_BUCKET`. Веб-консоль MinIO: http://localhost:9001 (minioadmin/minioadmin).
+- `local` — диск текущей ноды (`app/storage/local.py`), годится для простого
+  запуска в один бэкенд без MinIO.
 
 ## Миграции
 
@@ -144,7 +151,6 @@ aerich migrate && aerich upgrade   # последующие изменения
 
 ## Ограничения MVP / что дальше
 
-- `MinioStorageProvider` (S3 API) — заготовлен интерфейсом, не реализован.
 - Publish принимает ровно одну версию + одно вложение за запрос (стандартное
   поведение npm CLI); unpublish/deprecate не реализованы.
 - Proxy-tarball скачивается с upstream целиком в память перед кэшированием —
