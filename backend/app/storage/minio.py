@@ -123,7 +123,7 @@ class MinioStorageProvider(IStorageProvider):
                         UploadId=upload_id,
                         MultipartUpload={"Parts": parts},
                     )
-            except Exception:
+            except BaseException:  # включая CancelledError — обрыв отменяет multipart
                 if upload_id is not None:
                     try:
                         await s3.abort_multipart_upload(

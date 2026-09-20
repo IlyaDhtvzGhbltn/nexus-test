@@ -10,10 +10,13 @@ Registry URL для клиента: http://<host>:8000/npm/<repo_name>/
 (@scope/name), затем обычные — иначе catch-all сегменты перехватят чужие запросы.
 """
 
+import asyncio
 import base64
+import contextlib
 import hashlib
 import io
 import json
+import logging
 import re
 import tarfile
 from datetime import datetime, timezone
@@ -30,7 +33,12 @@ from app.storage import IStorageProvider, get_storage
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 CHUNK = 1024 * 1024
+# Сколько первых байт tarball держать для извлечения package.json.
+# Файлы крупнее получают метаданные из packument (фолбэк), память на запрос ограничена.
+PROXY_EXTRACT_CAP = 8 * 1024 * 1024
 NAME_RE = re.compile(r"^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$", re.IGNORECASE)
 FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.tgz$")
 
@@ -275,7 +283,139 @@ async def npm_search(
     return {"objects": objects, "total": len(objects), "time": now}
 
 
+# --- Single-flight: один файл качается с upstream максимум одним запросом ----------
+# Замок per-process; при нескольких нодах каждая качает максимум один раз
+# (честная межнодовая блокировка — через Redis, шаг 6 плана).
+
+_download_locks: dict[str, list] = {}  # key -> [asyncio.Lock, кол-во ожидающих]
+
+
+async def _acquire_download_lock(key: str) -> list:
+    entry = _download_locks.get(key)
+    if entry is None:
+        entry = _download_locks[key] = [asyncio.Lock(), 0]
+    entry[1] += 1
+    await entry[0].acquire()
+    return entry
+
+
+def _release_download_lock(key: str, entry: list) -> None:
+    entry[0].release()
+    entry[1] -= 1
+    if entry[1] <= 0:
+        _download_locks.pop(key, None)
+
+
 # --- Tarball (scoped раньше unscoped) --------------------------------------------
+
+_EOF = object()
+
+
+async def _put_or_fail(queue: asyncio.Queue, item, upload_task: asyncio.Task) -> None:
+    """queue.put, который не зависнет, если заливка в хранилище умерла."""
+    put_task = asyncio.ensure_future(queue.put(item))
+    await asyncio.wait({put_task, upload_task}, return_when=asyncio.FIRST_COMPLETED)
+    if put_task.done():
+        put_task.result()
+        return
+    put_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await put_task
+    upload_task.result()  # заливка завершилась раньше потока — почти наверняка ошибкой
+    raise RuntimeError("storage upload finished before the upstream stream ended")
+
+
+async def _cached_version(
+    repo: Repository, name: str, filename: str, storage: IStorageProvider
+) -> PackageVersion | None:
+    pkg = await Package.get_or_none(repository=repo, name=name)
+    if pkg is None:
+        return None
+    pv = await PackageVersion.get_or_none(package=pkg, filename=filename)
+    if pv is not None and await storage.exists(pv.storage_key):
+        return pv
+    return None
+
+
+async def _stream_and_cache(
+    repo: Repository,
+    name: str,
+    version: str,
+    key: str,
+    storage: IStorageProvider,
+    client: httpx.AsyncClient,
+    response: httpx.Response,
+    lock_entry: list,
+) -> AsyncIterator[bytes]:
+    """Tee-стриминг: каждый чанк с upstream уходит клиенту и в хранилище одновременно.
+
+    Файл целиком в памяти не появляется. Хранилище кормится через очередь
+    с backpressure; при любом обрыве заливка отменяется (недокачанный блоб
+    не становится видимым), при полном успехе — пишутся метаданные в БД.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+
+    async def _queue_stream() -> AsyncIterator[bytes]:
+        while True:
+            item = await queue.get()
+            if item is _EOF:
+                return
+            yield item
+
+    upload_task = asyncio.create_task(storage.upload_file(key, _queue_stream()))
+    sha1 = hashlib.sha1()
+    sha512 = hashlib.sha512()
+    size = 0
+    head = bytearray()  # первые байты — для извлечения package.json
+    completed = False
+    try:
+        async for chunk in response.aiter_bytes(CHUNK):
+            sha1.update(chunk)
+            sha512.update(chunk)
+            size += len(chunk)
+            if size <= PROXY_EXTRACT_CAP:
+                head.extend(chunk)
+            await _put_or_fail(queue, chunk, upload_task)
+            yield chunk
+        await _put_or_fail(queue, _EOF, upload_task)
+        blob = await upload_task
+
+        # Метаданные пишем ДО освобождения замка: ждущие запросы после пробуждения
+        # проверяют кэш по БД и обязаны увидеть запись. Ответ клиенту уже ушёл,
+        # поэтому ошибка метаданных стрим не роняет — только лог.
+        try:
+            manifest = _extract_package_json(bytes(head)) if size <= PROXY_EXTRACT_CAP else None
+            if manifest is None:
+                # Файл больше лимита буфера — берём манифест из packument
+                try:
+                    packument = await _fetch_upstream_packument(repo, name)
+                    manifest = (packument.get("versions") or {}).get(version)
+                except HTTPException:
+                    manifest = None
+            manifest = dict(manifest) if manifest else {"name": name, "version": version}
+            manifest.pop("dist", None)
+            await _save_version_metadata(
+                repo,
+                name,
+                manifest.get("version") or version,
+                manifest,
+                blob.key,
+                blob.size,
+                shasum=sha1.hexdigest(),
+                integrity="sha512-" + base64.b64encode(sha512.digest()).decode(),
+            )
+        except Exception:
+            logger.exception("Failed to store metadata for cached tarball %s", key)
+        completed = True
+    finally:
+        if not completed:
+            upload_task.cancel()
+            with contextlib.suppress(BaseException):
+                await upload_task
+        await response.aclose()
+        await client.aclose()
+        _release_download_lock(key, lock_entry)
+
 
 async def _download_tarball(
     request: Request,
@@ -288,46 +428,53 @@ async def _download_tarball(
     if not FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid tarball filename")
 
-    pkg = await Package.get_or_none(repository=repo, name=name)
-    if pkg is not None:
-        pv = await PackageVersion.get_or_none(package=pkg, filename=filename)
-        if pv is not None and await storage.exists(pv.storage_key):
-            return await _serve_blob(storage, pv)
+    pv = await _cached_version(repo, name, filename, storage)
+    if pv is not None:
+        return await _serve_blob(storage, pv)
 
     if repo.type == RepoType.HOSTED:
         raise HTTPException(status_code=404, detail="Tarball not found")
 
-    # Proxy cache miss: качаем с upstream, кэшируем, извлекаем метаданные
+    # Proxy cache miss
     basename = name.split("/")[-1]
     if not (filename.startswith(basename + "-") and filename.endswith(".tgz")):
         raise HTTPException(status_code=400, detail="Tarball filename does not match package")
     version = filename[len(basename) + 1 : -len(".tgz")]
+    key = _storage_key(repo, name, filename)
 
-    url = f"{_upstream_root(repo)}/{_quote_name(name)}/-/{filename}"
+    lock_entry = await _acquire_download_lock(key)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0)) as client:
-            response = await client.get(url)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Upstream unavailable: {exc}") from exc
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail="Tarball not found on upstream")
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Upstream returned {response.status_code}")
+        # Пока ждали замок, файл мог скачать параллельный запрос
+        pv = await _cached_version(repo, name, filename, storage)
+        if pv is not None:
+            _release_download_lock(key, lock_entry)
+            return await _serve_blob(storage, pv)
 
-    data = response.content
-    blob = await storage.upload_file(_storage_key(repo, name, filename), _iter_bytes(data))
-    manifest = _extract_package_json(data) or {"name": name, "version": version}
-    pv = await _save_version_metadata(
-        repo,
-        name,
-        manifest.get("version") or version,
-        manifest,
-        blob.key,
-        blob.size,
-        shasum=hashlib.sha1(data).hexdigest(),
-        integrity="sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode(),
+        url = f"{_upstream_root(repo)}/{_quote_name(name)}/-/{filename}"
+        client = httpx.AsyncClient(
+            follow_redirects=True, timeout=httpx.Timeout(60.0, connect=10.0)
+        )
+        try:
+            response = await client.send(client.build_request("GET", url), stream=True)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise HTTPException(status_code=502, detail=f"Upstream unavailable: {exc}") from exc
+        if response.status_code == 404:
+            await response.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=404, detail="Tarball not found on upstream")
+        if response.status_code != 200:
+            await response.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=502, detail=f"Upstream returned {response.status_code}")
+    except BaseException:
+        _release_download_lock(key, lock_entry)
+        raise
+
+    return StreamingResponse(
+        _stream_and_cache(repo, name, version, key, storage, client, response, lock_entry),
+        media_type="application/octet-stream",
     )
-    return await _serve_blob(storage, pv)
 
 
 @router.get("/npm/{repo_name}/@{scope}/{pkg_name}/-/{filename}")

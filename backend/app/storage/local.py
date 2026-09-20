@@ -40,7 +40,7 @@ class LocalStorageProvider(IStorageProvider):
                     size += len(chunk)
                     await f.write(chunk)
             await aiofiles.os.replace(tmp, target)
-        except Exception:
+        except BaseException:  # включая CancelledError — обрыв не должен оставить .part
             if tmp.exists():
                 await aiofiles.os.remove(tmp)
             raise
