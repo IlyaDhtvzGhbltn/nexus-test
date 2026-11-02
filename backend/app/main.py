@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from tortoise.contrib.fastapi import RegisterTortoise
 
+from app import events
 from app.config import get_settings
 from app.db import TORTOISE_ORM
 from app.models import DownloadAuditLog, OperatorAuditLog
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
+            await events.close()
 
 
 app = FastAPI(

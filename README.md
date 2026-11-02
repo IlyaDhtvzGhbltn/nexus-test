@@ -18,6 +18,7 @@
 ├── docker-compose.yml
 ├── backend/
 │   ├── Dockerfile
+│   ├── Dockerfile.jobber      # образ Jobber'а (+Trivy)
 │   ├── requirements.txt
 │   └── app/
 │       ├── main.py            # приложение, lifespan (init БД + сид)
@@ -27,6 +28,9 @@
 │       ├── schemas.py         # Pydantic-схемы
 │       ├── security.py        # JWT, bcrypt, RBAC-зависимости (атомарные права)
 │       ├── seed.py            # bootstrap-суперадмин (пароль обязателен, >=12 символов)
+│       ├── audit.py           # запись журналов (очередь или синхронный фолбэк)
+│       ├── events.py          # публикация событий в RabbitMQ (best-effort)
+│       ├── jobber/            # воркер: консьюмеры очередей, сканер Trivy, перепроверка
 │       ├── storage/
 │       │   ├── base.py        # IStorageProvider (интерфейс)
 │       │   ├── local.py       # LocalStorageProvider (./storage)
@@ -163,7 +167,31 @@ Scoped-пакеты (`@scope/name`, URL-encoded `%2f`) поддерживают�
   операторский журнал.
 
 API: `GET/POST /api/security/versions...`, `GET/POST/DELETE /api/security/whitelist...`.
-Автоматическое сканирование (Trivy + RabbitMQ) — следующий этап.
+
+### Автоматическое сканирование (Jobber)
+
+Отдельный контейнер `jobber` (код общий с бэкендом, вход `app/jobber/main.py`,
+образ `Dockerfile.jobber` со встроенным **Trivy**):
+
+1. Бэкенд после сохранения блоба (publish или кэширование прокси) шлёт событие
+   в очередь RabbitMQ `scan-tasks` (best-effort: если брокер недоступен,
+   загрузка не ломается — версию подберёт плановая перепроверка).
+2. Jobber берёт задачу, скачивает tgz из хранилища во временную папку,
+   распаковывает, подкладывает синтетический `package-lock.json` с точной
+   версией пакета и запускает `trivy fs` (базы уязвимостей Trivy качает сам,
+   кэш — volume `trivycache`).
+3. Находки уровней из `QUARANTINE_SEVERITIES` (по умолчанию `CRITICAL,HIGH`)
+   → статус `QUARANTINED`, иначе `CLEAN`. WHITELISTED-версии не сканируются.
+   Результат (список CVE) сохраняется в `scan_findings`, решение пишется в
+   операторский журнал (actor `jobber`, действие `scan.result`).
+4. Плановая перепроверка: раз в `RESCAN_INTERVAL_HOURS` (24) в очередь ставятся
+   версии, не сканированные дольше `RESCAN_MAX_AGE_DAYS` (7) — перепроверка
+   обновлёнными базами.
+
+Журнал скачиваний при включённом RabbitMQ тоже идёт через очередь
+(`download-audit`, пишет Jobber) — выдача пакетов не ждёт вставку в БД;
+без брокера — синхронный фолбэк. Консоль RabbitMQ: http://localhost:15672
+(guest/guest).
 
 ## Аудит
 

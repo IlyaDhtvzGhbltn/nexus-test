@@ -203,6 +203,9 @@ class PackageVersion(models.Model):
     quarantine_status = fields.CharEnumField(
         QuarantineStatus, max_length=16, default=QuarantineStatus.UNKNOWN
     )
+    # Результаты последнего сканирования Jobber'ом
+    last_scanned_at = fields.DatetimeField(null=True)
+    scan_findings = fields.JSONField(default=list)
     uploaded_by: fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
         "models.User", related_name="published_versions", null=True, on_delete=fields.SET_NULL
     )

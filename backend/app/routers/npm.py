@@ -28,6 +28,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.audit import log_download
+from app.events import publish_scan_task
 from app.models import (
     Package,
     PackageVersion,
@@ -455,7 +456,7 @@ async def _stream_and_cache(
                     manifest = None
             manifest = dict(manifest) if manifest else {"name": name, "version": version}
             manifest.pop("dist", None)
-            await _save_version_metadata(
+            pv = await _save_version_metadata(
                 repo,
                 name,
                 manifest.get("version") or version,
@@ -465,6 +466,8 @@ async def _stream_and_cache(
                 shasum=sha1.hexdigest(),
                 integrity="sha512-" + base64.b64encode(sha512.digest()).decode(),
             )
+            # Событие для Jobber'а: новый артефакт сохранён — проверить
+            await publish_scan_task(pv.id, repo.id, name, pv.version)
         except Exception:
             logger.exception("Failed to store metadata for cached tarball %s", key)
         await log_download(user, repo, name, version, user_agent)
@@ -710,7 +713,7 @@ async def _publish(
         ) or {}
         stored_manifest.setdefault("description", package_json.get("description"))
 
-    await _save_version_metadata(
+    pv = await _save_version_metadata(
         repo,
         name,
         version,
@@ -722,6 +725,8 @@ async def _publish(
         dist_tags=body.get("dist-tags") or {},
         user=user,
     )
+    # Событие для Jobber'а: загруженный пользователем артефакт тоже проверяется
+    await publish_scan_task(pv.id, repo.id, name, version)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"ok": True, "id": name, "rev": version, "success": True},

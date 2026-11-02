@@ -200,7 +200,8 @@ export default function SecurityPage() {
                   <TableCell>Package</TableCell>
                   <TableCell>Version</TableCell>
                   <TableCell>Status</TableCell>
-                  <TableCell>Cached at</TableCell>
+                  <TableCell>Findings</TableCell>
+                  <TableCell>Scanned</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
@@ -213,7 +214,21 @@ export default function SecurityPage() {
                     <TableCell>
                       <StatusChip status={v.quarantine_status} />
                     </TableCell>
-                    <TableCell>{fmt(v.created_at)}</TableCell>
+                    <TableCell>
+                      {v.scan_findings.length === 0 ? (
+                        '—'
+                      ) : (
+                        <Tooltip
+                          title={v.scan_findings
+                            .slice(0, 10)
+                            .map((f) => `${f.severity}: ${f.id} (${f.package}@${f.installed})`)
+                            .join('; ')}
+                        >
+                          <Chip label={v.scan_findings.length} size="small" color="error" />
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                    <TableCell>{v.last_scanned_at ? fmt(v.last_scanned_at) : 'never'}</TableCell>
                     <TableCell align="right">
                       {v.quarantine_status !== 'WHITELISTED' && (
                         <>

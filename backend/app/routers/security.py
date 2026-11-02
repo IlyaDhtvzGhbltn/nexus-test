@@ -30,6 +30,8 @@ def _version_out(pv: PackageVersion) -> SecurityVersionOut:
         quarantine_status=pv.quarantine_status,
         size=pv.size,
         created_at=pv.created_at,
+        last_scanned_at=pv.last_scanned_at,
+        scan_findings=pv.scan_findings or [],
     )
 
 

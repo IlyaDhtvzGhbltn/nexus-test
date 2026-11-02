@@ -143,6 +143,8 @@ class SecurityVersionOut(BaseModel):
     quarantine_status: QuarantineStatus
     size: int
     created_at: datetime
+    last_scanned_at: datetime | None
+    scan_findings: list[dict]
 
 
 class WhitelistCreate(BaseModel):

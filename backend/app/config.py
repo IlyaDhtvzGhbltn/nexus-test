@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     # Сколько дней хранить журналы аудита (требование: не менее 90)
     audit_retention_days: int = 90
 
+    # RabbitMQ (пусто = события отключены: аудит пишется напрямую, сканирования нет)
+    rabbitmq_url: str = ""
+    scan_queue: str = "scan-tasks"
+    audit_queue: str = "download-audit"
+
+    # Jobber / Trivy
+    trivy_path: str = "trivy"
+    trivy_timeout_seconds: int = 300
+    # Какие уровни уязвимостей отправляют версию в карантин
+    quarantine_severities: str = "CRITICAL,HIGH"
+    # Плановая перепроверка: раз в N часов проверять версии,
+    # не сканированные дольше M дней
+    rescan_interval_hours: int = 24
+    rescan_max_age_days: int = 7
+
     # Разрешённые origin'ы для CORS (dev-фронтенд)
     cors_origins: str = "http://localhost:5173"
 

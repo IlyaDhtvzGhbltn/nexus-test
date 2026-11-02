@@ -32,6 +32,17 @@ services:
       timeout: 3s
       retries: 15
 
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # веб-консоль RabbitMQ (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
   backend:
     build: ./backend
     environment:
@@ -42,6 +53,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET: artifacts
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       CORS_ORIGINS: http://localhost:5173
       INITIAL_ADMIN_LOGIN: admin
       # Обязательно поменяйте: без пароля длиной >=12 суперадмин не будет создан
@@ -54,6 +66,35 @@ services:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  jobber:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.jobber
+    environment:
+      DATABASE_URL: postgres://artifact:artifact@db:5432/artifact_repo
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: artifacts
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      QUARANTINE_SEVERITIES: CRITICAL,HIGH
+      RESCAN_INTERVAL_HOURS: "24"
+      RESCAN_MAX_AGE_DAYS: "7"
+      TRIVY_CACHE_DIR: /trivy-cache
+    volumes:
+      - ./backend/app:/app/app        # hot-reload кода (общий с backend)
+      - trivycache:/trivy-cache       # базы уязвимостей Trivy
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   frontend:
@@ -73,3 +114,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  trivycache:

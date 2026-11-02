@@ -42,6 +42,14 @@ export interface AccessGrant {
 
 export type QuarantineStatus = 'UNKNOWN' | 'CLEAN' | 'QUARANTINED' | 'WHITELISTED';
 
+export interface ScanFinding {
+  id: string;
+  package: string;
+  installed: string;
+  severity: string;
+  title: string;
+}
+
 export interface SecurityVersion {
   id: number;
   repository_name: string;
@@ -50,6 +58,8 @@ export interface SecurityVersion {
   quarantine_status: QuarantineStatus;
   size: number;
   created_at: string;
+  last_scanned_at: string | null;
+  scan_findings: ScanFinding[];
 }
 
 export interface WhitelistRule {
