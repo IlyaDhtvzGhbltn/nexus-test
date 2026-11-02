@@ -12,15 +12,21 @@ MAX_PAGE = 500
 @router.get("/downloads", response_model=list[DownloadLogOut])
 async def list_downloads(
     package: str | None = None,
+    version: str | None = None,
     user: str | None = None,
     repository: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ):
-    """Журнал выдачи пакетов: кто, что и когда скачал."""
+    """Журнал выдачи пакетов: кто, что и когда скачал.
+
+    Фильтр package+version отвечает на вопрос «кто успел скачать заражённую версию».
+    """
     query = DownloadAuditLog.all()
     if package:
         query = query.filter(package_name__icontains=package)
+    if version:
+        query = query.filter(package_version=version)
     if user:
         query = query.filter(user_login__icontains=user)
     if repository:

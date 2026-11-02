@@ -11,7 +11,7 @@ from tortoise.contrib.fastapi import RegisterTortoise
 from app.config import get_settings
 from app.db import TORTOISE_ORM
 from app.models import DownloadAuditLog, OperatorAuditLog
-from app.routers import audit, auth, npm, repositories, users
+from app.routers import audit, auth, npm, repositories, security, users
 from app.seed import seed_initial_data
 
 logging.basicConfig(level=logging.INFO)
@@ -73,6 +73,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(repositories.router)
 app.include_router(audit.router)
+app.include_router(security.router)
 app.include_router(npm.router)
 
 

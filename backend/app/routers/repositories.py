@@ -177,6 +177,7 @@ async def list_packages(repo_id: int):
                     dependencies=pv.dependencies or {},
                     size=pv.size,
                     shasum=pv.shasum,
+                    quarantine_status=pv.quarantine_status,
                     created_at=pv.created_at,
                 )
                 for pv in sorted(pkg.versions, key=lambda v: v.created_at)

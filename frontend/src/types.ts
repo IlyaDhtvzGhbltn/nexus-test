@@ -40,6 +40,46 @@ export interface AccessGrant {
   role: Role;
 }
 
+export type QuarantineStatus = 'UNKNOWN' | 'CLEAN' | 'QUARANTINED' | 'WHITELISTED';
+
+export interface SecurityVersion {
+  id: number;
+  repository_name: string;
+  package_name: string;
+  version: string;
+  quarantine_status: QuarantineStatus;
+  size: number;
+  created_at: string;
+}
+
+export interface WhitelistRule {
+  id: number;
+  package_name: string;
+  version: string;
+  reason: string;
+  created_by_login: string;
+  created_at: string;
+}
+
+export interface DownloadLog {
+  id: string;
+  user_login: string;
+  repository_name: string;
+  package_name: string;
+  package_version: string;
+  downloaded_at: string;
+  user_agent: string | null;
+}
+
+export interface OperatorLog {
+  id: string;
+  actor_login: string;
+  action: string;
+  target: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface PackageVersion {
   id: number;
   version: string;
@@ -47,6 +87,7 @@ export interface PackageVersion {
   dependencies: Record<string, string>;
   size: number;
   shasum: string | null;
+  quarantine_status: QuarantineStatus;
   created_at: string;
 }
 

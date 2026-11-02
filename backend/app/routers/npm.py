@@ -28,7 +28,15 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.audit import log_download
-from app.models import Package, PackageVersion, PermissionType, Repository, RepoType, User
+from app.models import (
+    Package,
+    PackageVersion,
+    PermissionType,
+    QuarantineStatus,
+    Repository,
+    RepoType,
+    User,
+)
 from app.security import (
     create_access_token,
     ensure_repo_permission,
@@ -158,17 +166,49 @@ def _version_doc(request: Request, repo: Repository, pv: PackageVersion, name: s
     return doc
 
 
+def _fix_dist_tags(dist_tags: dict, versions: dict) -> dict:
+    """Убирает теги, указывающие на недоступные версии; гарантирует валидный latest."""
+    tags = {tag: v for tag, v in dist_tags.items() if v in versions}
+    if versions and ("latest" not in tags or tags["latest"] not in versions):
+        tags["latest"] = _sort_versions(list(versions))[-1]
+    return tags
+
+
 async def _packument_from_db(request: Request, repo: Repository, name: str) -> dict | None:
     pkg = await Package.get_or_none(repository=repo, name=name)
     if pkg is None:
         return None
-    version_rows = await PackageVersion.filter(package=pkg)
+    version_rows = await PackageVersion.filter(package=pkg).exclude(
+        quarantine_status=QuarantineStatus.QUARANTINED
+    )
     if not version_rows:
         return None
     versions = {pv.version: _version_doc(request, repo, pv, name) for pv in version_rows}
-    dist_tags = dict(pkg.dist_tags or {})
-    dist_tags.setdefault("latest", _sort_versions(list(versions))[-1])
+    dist_tags = _fix_dist_tags(dict(pkg.dist_tags or {}), versions)
     return {"_id": name, "name": name, "dist-tags": dist_tags, "versions": versions}
+
+
+async def _strip_quarantined(repo: Repository, name: str, packument: dict) -> dict:
+    """Убирает из packument версии, заблокированные карантином локально."""
+    quarantined = set(
+        await PackageVersion.filter(
+            package__repository=repo,
+            package__name=name,
+            quarantine_status=QuarantineStatus.QUARANTINED,
+        ).values_list("version", flat=True)
+    )
+    if not quarantined:
+        return packument
+    versions = {
+        v: doc for v, doc in (packument.get("versions") or {}).items() if v not in quarantined
+    }
+    if not versions:
+        raise HTTPException(
+            status_code=404, detail=f"All available versions of '{name}' are quarantined"
+        )
+    packument["versions"] = versions
+    packument["dist-tags"] = _fix_dist_tags(packument.get("dist-tags") or {}, versions)
+    return packument
 
 
 def _upstream_root(repo: Repository) -> str:
@@ -336,6 +376,14 @@ async def _put_or_fail(queue: asyncio.Queue, item, upload_task: asyncio.Task) ->
     raise RuntimeError("storage upload finished before the upstream stream ended")
 
 
+def _ensure_not_quarantined(pv: PackageVersion, name: str) -> None:
+    if pv.quarantine_status == QuarantineStatus.QUARANTINED:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{name}@{pv.version} is quarantined: a security threat was detected",
+        )
+
+
 async def _cached_version(
     repo: Repository, name: str, filename: str, storage: IStorageProvider
 ) -> PackageVersion | None:
@@ -446,6 +494,7 @@ async def _download_tarball(
 
     pv = await _cached_version(repo, name, filename, storage)
     if pv is not None:
+        _ensure_not_quarantined(pv, name)
         await log_download(user, repo, name, pv.version, user_agent)
         return await _serve_blob(storage, pv)
 
@@ -465,6 +514,7 @@ async def _download_tarball(
         pv = await _cached_version(repo, name, filename, storage)
         if pv is not None:
             _release_download_lock(key, lock_entry)
+            _ensure_not_quarantined(pv, name)
             await log_download(user, repo, name, pv.version, user_agent)
             return await _serve_blob(storage, pv)
 
@@ -534,7 +584,7 @@ async def _get_packument(request: Request, repo: Repository, name: str) -> dict:
 
     try:
         upstream = await _fetch_upstream_packument(repo, name)
-        return _rewrite_packument(request, repo, upstream)
+        return await _strip_quarantined(repo, name, _rewrite_packument(request, repo, upstream))
     except HTTPException as exc:
         if exc.status_code == 502:
             # Upstream недоступен — офлайн-фолбэк из закэшированных версий

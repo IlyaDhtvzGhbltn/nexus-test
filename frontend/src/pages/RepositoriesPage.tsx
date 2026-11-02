@@ -30,6 +30,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SecurityIcon from '@mui/icons-material/Security';
 import { api, apiErrorMessage } from '../api';
+import { StatusChip } from './SecurityPage';
 import type { AccessGrant, Package, Repository, RepoType, Role, User } from '../types';
 
 interface CreateState {
@@ -369,6 +370,7 @@ export default function RepositoriesPage() {
                 <TableRow>
                   <TableCell>Package</TableCell>
                   <TableCell>Version</TableCell>
+                  <TableCell>Status</TableCell>
                   <TableCell>Dependencies</TableCell>
                   <TableCell align="right">Size</TableCell>
                   <TableCell align="right" />
@@ -385,6 +387,9 @@ export default function RepositoriesPage() {
                         )}
                       </TableCell>
                       <TableCell>{ver.version}</TableCell>
+                      <TableCell>
+                        <StatusChip status={ver.quarantine_status} />
+                      </TableCell>
                       <TableCell>
                         {Object.entries(ver.dependencies).length === 0
                           ? '—'

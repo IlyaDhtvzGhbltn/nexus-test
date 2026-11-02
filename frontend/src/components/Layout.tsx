@@ -9,6 +9,7 @@ const navItems = [
   { label: 'Repositories', path: '/repositories' },
   { label: 'Users', path: '/users' },
   { label: 'Roles', path: '/roles' },
+  { label: 'Security', path: '/security' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

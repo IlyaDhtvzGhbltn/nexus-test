@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import UsersPage from './pages/UsersPage';
 import RepositoriesPage from './pages/RepositoriesPage';
 import RolesPage from './pages/RolesPage';
+import SecurityPage from './pages/SecurityPage';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/users" element={<UsersPage />} />
         <Route path="/repositories" element={<RepositoriesPage />} />
         <Route path="/roles" element={<RolesPage />} />
+        <Route path="/security" element={<SecurityPage />} />
         <Route path="*" element={<Navigate to="/repositories" replace />} />
       </Routes>
     </Layout>

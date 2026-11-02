@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models import PermissionType, RepoType
+from app.models import PermissionType, QuarantineStatus, RepoType
 
 
 # --- Auth ---------------------------------------------------------------------
@@ -122,6 +122,44 @@ class OperatorLogOut(BaseModel):
     created_at: datetime
 
 
+# --- Карантин ---------------------------------------------------------------------
+
+class QuarantineStatusUpdate(BaseModel):
+    status: QuarantineStatus
+
+    @field_validator("status")
+    @classmethod
+    def no_manual_whitelist(cls, v: QuarantineStatus):
+        if v == QuarantineStatus.WHITELISTED:
+            raise ValueError("Use a whitelist rule to whitelist a version")
+        return v
+
+
+class SecurityVersionOut(BaseModel):
+    id: int
+    repository_name: str
+    package_name: str
+    version: str
+    quarantine_status: QuarantineStatus
+    size: int
+    created_at: datetime
+
+
+class WhitelistCreate(BaseModel):
+    package_name: str = Field(min_length=1, max_length=214)
+    version: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=3)
+
+
+class WhitelistOut(BaseModel):
+    id: int
+    package_name: str
+    version: str
+    reason: str
+    created_by_login: str
+    created_at: datetime
+
+
 # --- Packages (npm) ---------------------------------------------------------------
 
 class PackageVersionOut(BaseModel):
@@ -131,6 +169,7 @@ class PackageVersionOut(BaseModel):
     dependencies: dict[str, str]
     size: int
     shasum: str | None
+    quarantine_status: QuarantineStatus
     created_at: datetime
 
 

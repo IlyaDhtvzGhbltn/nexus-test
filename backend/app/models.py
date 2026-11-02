@@ -9,6 +9,13 @@ class RepoType(str, Enum):
     PROXY = "proxy"
 
 
+class QuarantineStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"          # ещё не сканировался (выдаётся)
+    CLEAN = "CLEAN"              # проверен, угроз нет
+    QUARANTINED = "QUARANTINED"  # угроза найдена, выдача заблокирована
+    WHITELISTED = "WHITELISTED"  # ручное исключение, сканер игнорирует
+
+
 class PermissionType(str, Enum):
     """Атомарные права над репозиторием."""
 
@@ -108,6 +115,28 @@ class Package(models.Model):
         unique_together = (("repository", "name"),)
 
 
+class WhitelistRule(models.Model):
+    """Ручное исключение из карантина: точная пара пакет+версия.
+
+    Создание правила переводит совпадающие версии (во всех репозиториях)
+    в WHITELISTED; сканер такие версии игнорирует.
+    """
+
+    id = fields.IntField(pk=True)
+    package_name = fields.CharField(max_length=214)
+    version = fields.CharField(max_length=64)
+    reason = fields.TextField()
+    created_by: fields.ForeignKeyNullableRelation["User"] = fields.ForeignKeyField(
+        "models.User", related_name="whitelist_rules", null=True, on_delete=fields.SET_NULL
+    )
+    created_by_login = fields.CharField(max_length=64)
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "whitelist_rules"
+        unique_together = (("package_name", "version"),)
+
+
 class DownloadAuditLog(models.Model):
     """Аудит выдачи: каждый успешный факт скачивания пакета клиентом.
 
@@ -171,6 +200,9 @@ class PackageVersion(models.Model):
     size = fields.BigIntField()
     shasum = fields.CharField(max_length=40, null=True)      # sha1 (npm dist.shasum)
     integrity = fields.CharField(max_length=128, null=True)  # sha512-<base64>
+    quarantine_status = fields.CharEnumField(
+        QuarantineStatus, max_length=16, default=QuarantineStatus.UNKNOWN
+    )
     uploaded_by: fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
         "models.User", related_name="published_versions", null=True, on_delete=fields.SET_NULL
     )
