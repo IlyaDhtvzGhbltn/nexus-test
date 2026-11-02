@@ -6,9 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from app.config import get_settings
-from app.models import AccessType, Permission, Repository, RepoType, User
-
-ADMIN_ROLE = "ADMIN"
+from app.models import PermissionType, Repository, RepositoryAccess, RepoType, User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -51,7 +49,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     except (jwt.PyJWTError, KeyError, ValueError):
         raise credentials_error
 
-    user = await User.get_or_none(id=user_id).prefetch_related("roles")
+    user = await User.get_or_none(id=user_id)
     if user is None or not user.is_active:
         raise credentials_error
     return user
@@ -59,39 +57,55 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
 
 # --- RBAC --------------------------------------------------------------------
 
-def is_admin(user: User) -> bool:
-    return any(role.name == ADMIN_ROLE for role in user.roles)
-
-
-async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not is_admin(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+async def require_superadmin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_superadmin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Superadmin required")
     return user
 
 
-def require_repo_access(access: AccessType, repo_type: RepoType | None = None):
-    """Фабрика зависимостей: проверяет право access у пользователя на {repo_name}.
+async def get_repo_permissions(user: User, repo: Repository) -> set[str]:
+    """Суммарный набор прав пользователя на репозиторий (объединение всех его ролей)."""
+    if user.is_superadmin:
+        return {p.value for p in PermissionType}
+    grants = await RepositoryAccess.filter(user=user, repository=repo).prefetch_related("role")
+    permissions: set[str] = set()
+    for grant in grants:
+        permissions.update(grant.role.permissions or [])
+    return permissions
 
-    ADMIN имеет полный доступ ко всем репозиториям. Остальным нужна запись
-    Permission (роль пользователя + репозиторий + тип доступа) в БД.
-    """
 
-    async def dependency(repo_name: str, user: User = Depends(get_current_user)) -> Repository:
+async def ensure_repo_permission(
+    user: User, repo: Repository, permission: PermissionType
+) -> None:
+    if permission.value not in await get_repo_permissions(user, repo):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{permission.value} access to '{repo.name}' denied",
+        )
+
+
+def get_repository(repo_type: RepoType | None = None):
+    """Зависимость: находит репозиторий {repo_name} без проверки прав."""
+
+    async def dependency(repo_name: str) -> Repository:
         repo = await Repository.get_or_none(name=repo_name)
         if repo is None or (repo_type is not None and repo.type != repo_type):
             raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
+        return repo
 
-        if is_admin(user):
-            return repo
+    return dependency
 
-        allowed = await Permission.filter(
-            repository=repo, access_type=access, role__users__id=user.id
-        ).exists()
-        if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"{access.value} access to '{repo_name}' denied",
-            )
+
+def require_repo_access(permission: PermissionType, repo_type: RepoType | None = None):
+    """Зависимость: репозиторий {repo_name} + проверка атомарного права у пользователя."""
+
+    async def dependency(
+        repo_name: str, user: User = Depends(get_current_user)
+    ) -> Repository:
+        repo = await Repository.get_or_none(name=repo_name)
+        if repo is None or (repo_type is not None and repo.type != repo_type):
+            raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
+        await ensure_repo_permission(user, repo, permission)
         return repo
 
     return dependency

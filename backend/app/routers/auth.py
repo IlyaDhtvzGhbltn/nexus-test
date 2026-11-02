@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.models import User
-from app.schemas import RoleOut, Token, UserOut
+from app.schemas import Token, UserOut
 from app.security import create_access_token, get_current_user, verify_password
 
 router = APIRouter(prefix="/api/auth")
@@ -25,6 +25,6 @@ async def me(user: User = Depends(get_current_user)):
         id=user.id,
         login=user.login,
         is_active=user.is_active,
+        is_superadmin=user.is_superadmin,
         created_at=user.created_at,
-        roles=[RoleOut(id=r.id, name=r.name) for r in user.roles],
     )

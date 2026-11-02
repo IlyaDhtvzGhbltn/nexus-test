@@ -44,7 +44,8 @@ services:
       MINIO_BUCKET: artifacts
       CORS_ORIGINS: http://localhost:5173
       INITIAL_ADMIN_LOGIN: admin
-      INITIAL_ADMIN_PASSWORD: admin
+      # Обязательно поменяйте: без пароля длиной >=12 суперадмин не будет создан
+      INITIAL_ADMIN_PASSWORD: ChangeMe-Please-123
     ports:
       - "8000:8000"
     volumes:

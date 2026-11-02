@@ -25,9 +25,13 @@ class Settings(BaseSettings):
     minio_bucket: str = "artifacts"
     minio_region: str = "us-east-1"
 
-    # Учётка администратора, создаваемая при первом старте
+    # Bootstrap-суперадмин, создаваемый при первом старте.
+    # Пароль обязателен (минимум 12 символов) — дефолта нет намеренно.
     initial_admin_login: str = "admin"
-    initial_admin_password: str = "admin"
+    initial_admin_password: str = ""
+
+    # Сколько дней хранить журналы аудита (требование: не менее 90)
+    audit_retention_days: int = 90
 
     # Разрешённые origin'ы для CORS (dev-фронтенд)
     cors_origins: str = "http://localhost:5173"

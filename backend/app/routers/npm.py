@@ -27,8 +27,16 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.models import AccessType, Package, PackageVersion, Repository, RepoType, User
-from app.security import create_access_token, get_current_user, require_repo_access, verify_password
+from app.audit import log_download
+from app.models import Package, PackageVersion, PermissionType, Repository, RepoType, User
+from app.security import (
+    create_access_token,
+    ensure_repo_permission,
+    get_current_user,
+    get_repository,
+    require_repo_access,
+    verify_password,
+)
 from app.storage import IStorageProvider, get_storage
 
 router = APIRouter()
@@ -42,8 +50,11 @@ PROXY_EXTRACT_CAP = 8 * 1024 * 1024
 NAME_RE = re.compile(r"^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$", re.IGNORECASE)
 FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.tgz$")
 
-read_access = require_repo_access(AccessType.READ)
-write_access = require_repo_access(AccessType.WRITE)
+# READ — скачивание и метаданные версий, LIST — поиск/списки,
+# CREATE/UPDATE проверяются внутри publish (зависят от того, новая ли версия)
+read_access = require_repo_access(PermissionType.READ)
+list_access = require_repo_access(PermissionType.LIST)
+any_repo = get_repository()
 
 
 # --- Утилиты -------------------------------------------------------------------
@@ -239,7 +250,7 @@ async def npm_search(
     request: Request,
     text: str = "",
     size: int = 20,
-    repo: Repository = Depends(read_access),
+    repo: Repository = Depends(list_access),
 ):
     if repo.type == RepoType.PROXY:
         try:
@@ -346,6 +357,8 @@ async def _stream_and_cache(
     client: httpx.AsyncClient,
     response: httpx.Response,
     lock_entry: list,
+    user: User,
+    user_agent: str | None,
 ) -> AsyncIterator[bytes]:
     """Tee-стриминг: каждый чанк с upstream уходит клиенту и в хранилище одновременно.
 
@@ -406,6 +419,7 @@ async def _stream_and_cache(
             )
         except Exception:
             logger.exception("Failed to store metadata for cached tarball %s", key)
+        await log_download(user, repo, name, version, user_agent)
         completed = True
     finally:
         if not completed:
@@ -423,13 +437,16 @@ async def _download_tarball(
     name: str,
     filename: str,
     storage: IStorageProvider,
+    user: User,
 ):
     _check_name(name)
     if not FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid tarball filename")
+    user_agent = request.headers.get("user-agent")
 
     pv = await _cached_version(repo, name, filename, storage)
     if pv is not None:
+        await log_download(user, repo, name, pv.version, user_agent)
         return await _serve_blob(storage, pv)
 
     if repo.type == RepoType.HOSTED:
@@ -448,6 +465,7 @@ async def _download_tarball(
         pv = await _cached_version(repo, name, filename, storage)
         if pv is not None:
             _release_download_lock(key, lock_entry)
+            await log_download(user, repo, name, pv.version, user_agent)
             return await _serve_blob(storage, pv)
 
         url = f"{_upstream_root(repo)}/{_quote_name(name)}/-/{filename}"
@@ -472,7 +490,9 @@ async def _download_tarball(
         raise
 
     return StreamingResponse(
-        _stream_and_cache(repo, name, version, key, storage, client, response, lock_entry),
+        _stream_and_cache(
+            repo, name, version, key, storage, client, response, lock_entry, user, user_agent
+        ),
         media_type="application/octet-stream",
     )
 
@@ -485,8 +505,9 @@ async def tarball_scoped(
     filename: str,
     repo: Repository = Depends(read_access),
     storage: IStorageProvider = Depends(get_storage),
+    user: User = Depends(get_current_user),
 ):
-    return await _download_tarball(request, repo, f"@{scope}/{pkg_name}", filename, storage)
+    return await _download_tarball(request, repo, f"@{scope}/{pkg_name}", filename, storage, user)
 
 
 @router.get("/npm/{repo_name}/{pkg_name}/-/{filename}")
@@ -496,8 +517,9 @@ async def tarball(
     filename: str,
     repo: Repository = Depends(read_access),
     storage: IStorageProvider = Depends(get_storage),
+    user: User = Depends(get_current_user),
 ):
-    return await _download_tarball(request, repo, pkg_name, filename, storage)
+    return await _download_tarball(request, repo, pkg_name, filename, storage, user)
 
 
 # --- Packument и манифест версии ---------------------------------------------------
@@ -610,11 +632,20 @@ async def _publish(
     if not data:
         raise HTTPException(status_code=400, detail="Empty attachment")
 
+    # Новая версия требует CREATE; перезапись существующей — UPDATE
+    # и включённую политику allow_overwrite у репозитория
     pkg = await Package.get_or_none(repository=repo, name=name)
-    if pkg is not None and await PackageVersion.exists(package=pkg, version=version):
-        raise HTTPException(
-            status_code=409, detail=f"Cannot publish over existing version {version}"
-        )
+    version_exists = pkg is not None and await PackageVersion.exists(
+        package=pkg, version=version
+    )
+    if version_exists:
+        if not repo.allow_overwrite:
+            raise HTTPException(
+                status_code=409, detail=f"Cannot publish over existing version {version}"
+            )
+        await ensure_repo_permission(user, repo, PermissionType.UPDATE)
+    else:
+        await ensure_repo_permission(user, repo, PermissionType.CREATE)
 
     filename = _tarball_filename(name, version)
     blob = await storage.upload_file(_storage_key(repo, name, filename), _iter_bytes(data))
@@ -652,7 +683,7 @@ async def publish_scoped(
     request: Request,
     scope: str,
     pkg_name: str,
-    repo: Repository = Depends(write_access),
+    repo: Repository = Depends(any_repo),
     user: User = Depends(get_current_user),
     storage: IStorageProvider = Depends(get_storage),
 ):
@@ -663,7 +694,7 @@ async def publish_scoped(
 async def publish(
     request: Request,
     pkg_name: str,
-    repo: Repository = Depends(write_access),
+    repo: Repository = Depends(any_repo),
     user: User = Depends(get_current_user),
     storage: IStorageProvider = Depends(get_storage),
 ):

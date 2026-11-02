@@ -1,3 +1,4 @@
+import uuid
 from enum import Enum
 
 from tortoise import fields, models
@@ -8,17 +9,41 @@ class RepoType(str, Enum):
     PROXY = "proxy"
 
 
-class AccessType(str, Enum):
-    READ = "READ"
-    WRITE = "WRITE"
+class PermissionType(str, Enum):
+    """Атомарные права над репозиторием."""
+
+    CREATE = "CREATE"  # загрузка новых версий (publish)
+    READ = "READ"      # скачивание артефактов и метаданных версий
+    UPDATE = "UPDATE"  # перезапись существующих версий (если разрешено политикой репозитория)
+    DELETE = "DELETE"  # удаление версий/пакетов
+    LIST = "LIST"      # поиск и списки пакетов
+    ADMIN = "ADMIN"    # изменение параметров репозитория
+
+
+class User(models.Model):
+    id = fields.IntField(pk=True)
+    login = fields.CharField(max_length=64, unique=True)
+    hashed_password = fields.CharField(max_length=128)
+    is_active = fields.BooleanField(default=True)
+    # Глобальный суперадмин: полный доступ ко всему + управление юзерами/ролями/репозиториями
+    is_superadmin = fields.BooleanField(default=False)
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "users"
 
 
 class Role(models.Model):
+    """Именованный набор атомарных прав (например, developer, ci_runner, repo_admin).
+
+    Сама по себе роль прав не даёт — она действует только будучи назначенной
+    пользователю в контексте репозитория (RepositoryAccess).
+    """
+
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=64, unique=True)
-
-    users: fields.ManyToManyRelation["User"]
-    permissions: fields.ReverseRelation["Permission"]
+    # Список значений PermissionType, например ["READ", "LIST", "CREATE"]
+    permissions = fields.JSONField(default=list)
 
     class Meta:
         table = "roles"
@@ -27,51 +52,41 @@ class Role(models.Model):
         return self.name
 
 
-class User(models.Model):
-    id = fields.IntField(pk=True)
-    login = fields.CharField(max_length=64, unique=True)
-    hashed_password = fields.CharField(max_length=128)
-    is_active = fields.BooleanField(default=True)
-    created_at = fields.DatetimeField(auto_now_add=True)
-
-    roles: fields.ManyToManyRelation[Role] = fields.ManyToManyField(
-        "models.Role", related_name="users", through="user_roles"
-    )
-
-    class Meta:
-        table = "users"
-
-
 class Repository(models.Model):
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=64, unique=True)
     type = fields.CharEnumField(RepoType, max_length=16)
     # Обязателен только для proxy-репозиториев
     upstream_url = fields.CharField(max_length=512, null=True)
+    # Политика: можно ли перезаписывать существующие версии (требует права UPDATE)
+    allow_overwrite = fields.BooleanField(default=False)
     created_at = fields.DatetimeField(auto_now_add=True)
-
-    permissions: fields.ReverseRelation["Permission"]
-    artifacts: fields.ReverseRelation["Artifact"]
 
     class Meta:
         table = "repositories"
 
 
-class Permission(models.Model):
-    """Связка Роль + Репозиторий + Тип доступа."""
+class RepositoryAccess(models.Model):
+    """Назначение роли пользователю в контексте репозитория.
+
+    У пользователя может быть несколько ролей на один репозиторий —
+    права суммируются.
+    """
 
     id = fields.IntField(pk=True)
-    role: fields.ForeignKeyRelation[Role] = fields.ForeignKeyField(
-        "models.Role", related_name="permissions", on_delete=fields.CASCADE
+    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+        "models.User", related_name="repository_access", on_delete=fields.CASCADE
     )
     repository: fields.ForeignKeyRelation[Repository] = fields.ForeignKeyField(
-        "models.Repository", related_name="permissions", on_delete=fields.CASCADE
+        "models.Repository", related_name="access_grants", on_delete=fields.CASCADE
     )
-    access_type = fields.CharEnumField(AccessType, max_length=8)
+    role: fields.ForeignKeyRelation[Role] = fields.ForeignKeyField(
+        "models.Role", related_name="grants", on_delete=fields.CASCADE
+    )
 
     class Meta:
-        table = "permissions"
-        unique_together = (("role", "repository", "access_type"),)
+        table = "repository_access"
+        unique_together = (("user", "repository", "role"),)
 
 
 class Package(models.Model):
@@ -91,6 +106,51 @@ class Package(models.Model):
     class Meta:
         table = "packages"
         unique_together = (("repository", "name"),)
+
+
+class DownloadAuditLog(models.Model):
+    """Аудит выдачи: каждый успешный факт скачивания пакета клиентом.
+
+    user/repository — SET_NULL, чтобы удаление пользователя или репозитория
+    не стирало историю; логин и имя дублируются строками.
+    """
+
+    id = fields.UUIDField(pk=True, default=uuid.uuid4)
+    user: fields.ForeignKeyNullableRelation["User"] = fields.ForeignKeyField(
+        "models.User", related_name="downloads", null=True, on_delete=fields.SET_NULL
+    )
+    user_login = fields.CharField(max_length=64)
+    repository: fields.ForeignKeyNullableRelation[Repository] = fields.ForeignKeyField(
+        "models.Repository", related_name="downloads", null=True, on_delete=fields.SET_NULL
+    )
+    repository_name = fields.CharField(max_length=64)
+    package_name = fields.CharField(max_length=214)
+    package_version = fields.CharField(max_length=64)
+    downloaded_at = fields.DatetimeField(auto_now_add=True)
+    user_agent = fields.CharField(max_length=512, null=True)
+
+    class Meta:
+        table = "download_audit_log"
+        ordering = ["-downloaded_at"]
+
+
+class OperatorAuditLog(models.Model):
+    """Аудит действий операторов: управление юзерами/ролями/репозиториями,
+    удаление версий; позже — карантинные решения (смена статуса, whitelist)."""
+
+    id = fields.UUIDField(pk=True, default=uuid.uuid4)
+    actor: fields.ForeignKeyNullableRelation["User"] = fields.ForeignKeyField(
+        "models.User", related_name="operator_actions", null=True, on_delete=fields.SET_NULL
+    )
+    actor_login = fields.CharField(max_length=64)
+    action = fields.CharField(max_length=64)   # например "user.create", "grant.revoke"
+    target = fields.CharField(max_length=512)  # человекочитаемая цель действия
+    details = fields.JSONField(default=dict)
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "operator_audit_log"
+        ordering = ["-created_at"]
 
 
 class PackageVersion(models.Model):

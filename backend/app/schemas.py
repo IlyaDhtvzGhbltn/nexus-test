@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models import AccessType, RepoType
+from app.models import PermissionType, RepoType
 
 
 # --- Auth ---------------------------------------------------------------------
@@ -16,11 +16,17 @@ class Token(BaseModel):
 
 class RoleCreate(BaseModel):
     name: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    permissions: list[PermissionType] = []
+
+
+class RoleUpdate(BaseModel):
+    permissions: list[PermissionType] | None = None
 
 
 class RoleOut(BaseModel):
     id: int
     name: str
+    permissions: list[PermissionType]
 
 
 # --- Users --------------------------------------------------------------------
@@ -28,21 +34,39 @@ class RoleOut(BaseModel):
 class UserCreate(BaseModel):
     login: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=4, max_length=128)
-    role_ids: list[int] = []
+    is_superadmin: bool = False
 
 
 class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=4, max_length=128)
     is_active: bool | None = None
-    role_ids: list[int] | None = None
+    is_superadmin: bool | None = None
 
 
 class UserOut(BaseModel):
     id: int
     login: str
     is_active: bool
+    is_superadmin: bool
     created_at: datetime
-    roles: list[RoleOut]
+
+
+# --- Назначение ролей на репозиторий --------------------------------------------
+
+class AccessGrantCreate(BaseModel):
+    user_id: int
+    role_id: int
+
+
+class GrantUserOut(BaseModel):
+    id: int
+    login: str
+
+
+class AccessGrantOut(BaseModel):
+    id: int
+    user: GrantUserOut
+    role: RoleOut
 
 
 # --- Repositories ---------------------------------------------------------------
@@ -51,6 +75,7 @@ class RepositoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9._-]+$")
     type: RepoType
     upstream_url: str | None = None
+    allow_overwrite: bool = False
 
     @field_validator("upstream_url")
     @classmethod
@@ -64,6 +89,7 @@ class RepositoryCreate(BaseModel):
 
 class RepositoryUpdate(BaseModel):
     upstream_url: str | None = None
+    allow_overwrite: bool | None = None
 
 
 class RepositoryOut(BaseModel):
@@ -71,20 +97,29 @@ class RepositoryOut(BaseModel):
     name: str
     type: RepoType
     upstream_url: str | None
+    allow_overwrite: bool
     created_at: datetime
 
 
-# --- Permissions -----------------------------------------------------------------
+# --- Аудит ----------------------------------------------------------------------
 
-class PermissionCreate(BaseModel):
-    role_id: int
-    access_type: AccessType
+class DownloadLogOut(BaseModel):
+    id: str
+    user_login: str
+    repository_name: str
+    package_name: str
+    package_version: str
+    downloaded_at: datetime
+    user_agent: str | None
 
 
-class PermissionOut(BaseModel):
-    id: int
-    role: RoleOut
-    access_type: AccessType
+class OperatorLogOut(BaseModel):
+    id: str
+    actor_login: str
+    action: str
+    target: str
+    details: dict
+    created_at: datetime
 
 
 # --- Packages (npm) ---------------------------------------------------------------

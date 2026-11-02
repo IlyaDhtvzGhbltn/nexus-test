@@ -23,10 +23,10 @@
 │       ├── main.py            # приложение, lifespan (init БД + сид)
 │       ├── config.py          # настройки (env)
 │       ├── db.py              # TORTOISE_ORM конфиг (используется aerich)
-│       ├── models.py          # User, Role, Repository, Permission, Package, PackageVersion
+│       ├── models.py          # User, Role, Repository, RepositoryAccess, Package, PackageVersion
 │       ├── schemas.py         # Pydantic-схемы
-│       ├── security.py        # JWT, bcrypt, RBAC-зависимости
-│       ├── seed.py            # роли ADMIN/DEVELOPER/CI_BOT + первый админ
+│       ├── security.py        # JWT, bcrypt, RBAC-зависимости (атомарные права)
+│       ├── seed.py            # bootstrap-суперадмин (пароль обязателен, >=12 символов)
 │       ├── storage/
 │       │   ├── base.py        # IStorageProvider (интерфейс)
 │       │   ├── local.py       # LocalStorageProvider (./storage)
@@ -34,11 +34,11 @@
 │       └── routers/
 │           ├── auth.py        # POST /api/auth/login, GET /api/auth/me
 │           ├── users.py       # CRUD пользователей + роли (ADMIN)
-│           ├── repositories.py# CRUD репозиториев, permissions, список пакетов (ADMIN)
+│           ├── repositories.py# CRUD репозиториев, назначения ролей (access), пакеты
 │           └── npm.py         # npm Registry API: login/publish/packument/tarball/search
 └── frontend/
     ├── Dockerfile
-    └── src/                   # Login, Users, Repositories (+пакеты, +permissions)
+    └── src/                   # Login, Users, Roles, Repositories (+пакеты, +access)
 ```
 
 ## Запуск
@@ -47,7 +47,8 @@
 docker compose up --build
 ```
 
-- Админ-панель: http://localhost:5173 (логин `admin` / пароль `admin`)
+- Админ-панель: http://localhost:5173 (логин `admin`, пароль — значение
+  `INITIAL_ADMIN_PASSWORD` из docker-compose.yml; поменяйте его перед первым запуском)
 - API: http://localhost:8000
 
 ## Использование с npm CLI
@@ -60,7 +61,7 @@ Registry URL репозитория: `http://localhost:8000/npm/<repo_name>/`
 # 2. Логин (npm получит JWT через PUT /-/user/org.couchdb.user:<login>)
 npm login --registry http://localhost:8000/npm/npm-internal/
 
-# 3. Публикация пакета (требует право WRITE или роль ADMIN)
+# 3. Публикация пакета (требует право CREATE или суперадмина)
 npm publish --registry http://localhost:8000/npm/npm-internal/
 
 # 4. Установка (требует READ)
@@ -109,17 +110,49 @@ Scoped-пакеты (`@scope/name`, URL-encoded `%2f`) поддерживают�
 
 ## RBAC
 
-| Действие | Требование |
-|---|---|
-| `npm publish` (PUT пакета) | право **WRITE** на репозиторий (или роль ADMIN) |
-| packument / tarball / search (GET) | право **READ** (или ADMIN) |
-| `/api/users`, `/api/repositories`, permissions | роль **ADMIN** |
+Модель: **Роль = именованный набор атомарных прав**; роль назначается
+пользователю **в контексте репозитория** (связка «пользователь + роль +
+репозиторий», вкладка Access у репозитория). Несколько ролей на один
+репозиторий — права суммируются.
 
-Права назначаются в админ-панели: связка *Роль + Репозиторий + READ/WRITE*.
-По умолчанию существует единственная встроенная роль `ADMIN` (полный доступ,
-удалить нельзя). Остальные роли админ создаёт сам на вкладке **Roles**;
-сама по себе роль ничего не даёт — доступ появляется после выдачи ей
-READ/WRITE на конкретный репозиторий.
+Атомарные права:
+
+| Право | Что разрешает |
+|---|---|
+| `CREATE` | публикация новых версий (`npm publish`) |
+| `READ` | скачивание tarball и метаданных версий (packument) |
+| `UPDATE` | перезапись существующей версии — только если у репозитория включена политика `allow_overwrite` |
+| `DELETE` | удаление версий/пакетов (`DELETE /api/package-versions/{id}`) |
+| `LIST` | поиск и списки (`npm search`, `/-/v1/search`) |
+| `ADMIN` | изменение параметров репозитория (upstream, allow_overwrite) |
+
+Ролей по умолчанию нет — их создаёт суперадмин на вкладке **Roles**
+(галочками отмечая права).
+
+**Суперадмин** — отдельный флаг пользователя (не роль): полный доступ ко всем
+репозиториям + управление пользователями, ролями и репозиториями
+(`/api/users`, `/api/roles`, `/api/repositories`). Bootstrap-суперадмин
+создаётся при первом старте; `INITIAL_ADMIN_PASSWORD` обязателен и должен быть
+не короче 12 символов — иначе аккаунт не создаётся. Рекомендуемый порядок:
+создать персональные админ-аккаунты и деактивировать bootstrap-аккаунт
+(обратно его включит любой действующий суперадмин). Защиты: нельзя
+деактивировать/удалить себя и последнего активного суперадмина.
+
+## Аудит
+
+Две таблицы (просмотр — только суперадмин, `GET /api/audit/...`):
+
+- **download_audit_log** — каждый успешный факт выдачи пакета клиенту:
+  кто (user_id + логин), что (пакет, версия, репозиторий), когда (timestamp с
+  таймзоной), user-agent. Эндпоинт: `/api/audit/downloads?package=&user=&repository=`.
+- **operator_audit_log** — действия операторов: создание/изменение/удаление
+  пользователей, ролей, репозиториев, назначений ролей, удаление версий
+  (позже — карантинные решения). Эндпоинт: `/api/audit/operations?action=&actor=`.
+
+Хранение: `AUDIT_RETENTION_DAYS` (по умолчанию 90 — требование «не менее
+3 месяцев»); записи старше удаляются фоновой задачей раз в сутки. Удаление
+пользователя или репозитория историю не стирает (логин/имя сохранены строкой).
+Запись аудита best-effort: её сбой логируется, но не ломает выдачу пакета.
 
 ## Архитектура хранилища
 
@@ -176,7 +209,8 @@ docker compose up --build
 
 ### Шаг 2. Войти в админ-панель
 
-Откройте в браузере http://localhost:5173 и войдите: логин `admin`, пароль `admin`.
+Откройте в браузере http://localhost:5173 и войдите: логин `admin`, пароль —
+значение `INITIAL_ADMIN_PASSWORD` из docker-compose.yml.
 Если страница входа открылась и пустила вас внутрь — авторизация и база данных работают.
 
 ### Шаг 3. Создать hosted-репозиторий
@@ -193,7 +227,8 @@ docker compose up --build
 mkdir hello-pkg && cd hello-pkg && npm init -y
 ```
 
-Затем залогиньтесь в наш реестр (введите `admin` / `admin`, поле email — любое):
+Затем залогиньтесь в наш реестр (логин `admin`, пароль из
+`INITIAL_ADMIN_PASSWORD`, поле email — любое):
 
 ```bash
 npm login --registry http://localhost:8000/npm/npm-internal/
@@ -244,10 +279,11 @@ npm install left-pad --registry http://localhost:8000/npm/npmjs-proxy/
 
 ### Шаг 8. Проверить разграничение прав (RBAC)
 
-1. На вкладке **Roles** создайте роль `DEVELOPER`, затем на вкладке **Users**
-   создайте пользователя `dev1` и отметьте ему эту роль.
-2. Попробуйте получить пакет под ним — должно быть отказано (нет прав).
-   Залогиньтесь под `dev1` и запросите пакет:
+1. На вкладке **Roles** создайте роль `developer` и отметьте ей права
+   `READ` и `LIST`. На вкладке **Users** создайте пользователя `dev1`
+   (переключатель Superadmin — выключен).
+2. Попробуйте получить пакет под ним — должно быть отказано (роль ещё не
+   назначена на репозиторий). Залогиньтесь под `dev1` и запросите пакет:
 
 ```bash
 npm login --registry http://localhost:8000/npm/npm-internal/
@@ -259,9 +295,9 @@ npm view hello-pkg --registry http://localhost:8000/npm/npm-internal/
 
    Ожидаемый результат: ошибка `403 Forbidden — READ access to 'npm-internal' denied`.
 3. Вернитесь в панель, у репозитория `npm-internal` нажмите иконку щита
-   (**Permissions**) и добавьте: роль `DEVELOPER`, доступ `READ`.
+   (**Access**) и добавьте назначение: пользователь `dev1` + роль `developer`.
 4. Повторите запрос — теперь пакет доступен. Для публикации под `dev1`
-   аналогично потребуется добавить доступ `WRITE`.
+   роли понадобится ещё право `CREATE` (отредактируйте роль на вкладке Roles).
 
 ### Если что-то пошло не так
 

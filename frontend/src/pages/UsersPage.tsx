@@ -3,14 +3,12 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControlLabel,
-  FormGroup,
   IconButton,
   Paper,
   Switch,
@@ -26,27 +24,31 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import { api, apiErrorMessage } from '../api';
-import type { Role, User } from '../types';
+import type { User } from '../types';
 
 interface EditorState {
   user: User | null; // null = создание нового
   login: string;
   password: string;
   isActive: boolean;
-  roleIds: number[];
+  isSuperadmin: boolean;
 }
 
-const emptyEditor: EditorState = { user: null, login: '', password: '', isActive: true, roleIds: [] };
+const emptyEditor: EditorState = {
+  user: null,
+  login: '',
+  password: '',
+  isActive: true,
+  isSuperadmin: false,
+};
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = () => {
     api.get<User[]>('/api/users').then((res) => setUsers(res.data)).catch((e) => setError(apiErrorMessage(e)));
-    api.get<Role[]>('/api/roles').then((res) => setRoles(res.data)).catch(() => {});
   };
 
   useEffect(reload, []);
@@ -59,13 +61,13 @@ export default function UsersPage() {
         await api.post('/api/users', {
           login: editor.login,
           password: editor.password,
-          role_ids: editor.roleIds,
+          is_superadmin: editor.isSuperadmin,
         });
       } else {
         await api.patch(`/api/users/${editor.user.id}`, {
           password: editor.password || null,
           is_active: editor.isActive,
-          role_ids: editor.roleIds,
+          is_superadmin: editor.isSuperadmin,
         });
       }
       setEditor(null);
@@ -83,14 +85,6 @@ export default function UsersPage() {
     } catch (e) {
       setError(apiErrorMessage(e));
     }
-  };
-
-  const toggleRole = (roleId: number) => {
-    if (!editor) return;
-    const roleIds = editor.roleIds.includes(roleId)
-      ? editor.roleIds.filter((id) => id !== roleId)
-      : [...editor.roleIds, roleId];
-    setEditor({ ...editor, roleIds });
   };
 
   return (
@@ -111,7 +105,7 @@ export default function UsersPage() {
           <TableHead>
             <TableRow>
               <TableCell>Login</TableCell>
-              <TableCell>Roles</TableCell>
+              <TableCell>Superadmin</TableCell>
               <TableCell>Active</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -121,9 +115,7 @@ export default function UsersPage() {
               <TableRow key={user.id}>
                 <TableCell>{user.login}</TableCell>
                 <TableCell>
-                  {user.roles.map((role) => (
-                    <Chip key={role.id} label={role.name} size="small" sx={{ mr: 0.5 }} />
-                  ))}
+                  {user.is_superadmin && <Chip label="superadmin" size="small" color="primary" />}
                 </TableCell>
                 <TableCell>{user.is_active ? 'Yes' : 'No'}</TableCell>
                 <TableCell align="right">
@@ -134,7 +126,7 @@ export default function UsersPage() {
                         login: user.login,
                         password: '',
                         isActive: user.is_active,
-                        roleIds: user.roles.map((r) => r.id),
+                        isSuperadmin: user.is_superadmin,
                       })
                     }
                   >
@@ -149,6 +141,10 @@ export default function UsersPage() {
           </TableBody>
         </Table>
       </Paper>
+      <Typography color="text.secondary" sx={{ mt: 2 }} variant="body2">
+        A superadmin has full access to everything. Regular users get access per repository:
+        assign roles via the shield icon on the Repositories page.
+      </Typography>
 
       <Dialog open={editor !== null} onClose={() => setEditor(null)} fullWidth maxWidth="xs">
         <DialogTitle>{editor?.user ? `Edit ${editor.user.login}` : 'New user'}</DialogTitle>
@@ -171,6 +167,15 @@ export default function UsersPage() {
               value={editor.password}
               onChange={(e) => setEditor({ ...editor, password: e.target.value })}
             />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editor.isSuperadmin}
+                  onChange={(e) => setEditor({ ...editor, isSuperadmin: e.target.checked })}
+                />
+              }
+              label="Superadmin (full access)"
+            />
             {editor.user !== null && (
               <FormControlLabel
                 control={
@@ -182,20 +187,6 @@ export default function UsersPage() {
                 label="Active"
               />
             )}
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>
-              Roles
-            </Typography>
-            <FormGroup>
-              {roles.map((role) => (
-                <FormControlLabel
-                  key={role.id}
-                  control={
-                    <Checkbox checked={editor.roleIds.includes(role.id)} onChange={() => toggleRole(role.id)} />
-                  }
-                  label={role.name}
-                />
-              ))}
-            </FormGroup>
           </DialogContent>
         )}
         <DialogActions>

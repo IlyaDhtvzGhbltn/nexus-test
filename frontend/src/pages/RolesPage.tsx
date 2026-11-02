@@ -3,11 +3,14 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
+  FormGroup,
   IconButton,
   Paper,
   Table,
@@ -20,13 +23,29 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import { api, apiErrorMessage } from '../api';
-import type { Role } from '../types';
+import { ALL_PERMISSIONS, PermissionType, Role } from '../types';
+
+const PERMISSION_HINTS: Record<PermissionType, string> = {
+  CREATE: 'publish new versions',
+  READ: 'download packages and version metadata',
+  UPDATE: 'overwrite existing versions (if repo policy allows)',
+  DELETE: 'delete versions/packages',
+  LIST: 'search and list packages',
+  ADMIN: 'change repository settings',
+};
+
+interface EditorState {
+  role: Role | null; // null = создание
+  name: string;
+  permissions: PermissionType[];
+}
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [newName, setNewName] = useState<string | null>(null); // null = диалог закрыт
+  const [editor, setEditor] = useState<EditorState | null>(null);
 
   const reload = () => {
     api.get<Role[]>('/api/roles').then((res) => setRoles(res.data)).catch((e) => setError(apiErrorMessage(e)));
@@ -34,12 +53,16 @@ export default function RolesPage() {
 
   useEffect(reload, []);
 
-  const create = async () => {
-    if (!newName) return;
+  const save = async () => {
+    if (!editor) return;
     setError(null);
     try {
-      await api.post('/api/roles', { name: newName.trim() });
-      setNewName(null);
+      if (editor.role === null) {
+        await api.post('/api/roles', { name: editor.name.trim(), permissions: editor.permissions });
+      } else {
+        await api.patch(`/api/roles/${editor.role.id}`, { permissions: editor.permissions });
+      }
+      setEditor(null);
       reload();
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -49,7 +72,7 @@ export default function RolesPage() {
   const remove = async (role: Role) => {
     if (
       !window.confirm(
-        `Delete role "${role.name}"? Its repository permissions and user assignments will be removed as well.`,
+        `Delete role "${role.name}"? All its repository assignments will be removed as well.`,
       )
     )
       return;
@@ -61,11 +84,23 @@ export default function RolesPage() {
     }
   };
 
+  const togglePermission = (perm: PermissionType) => {
+    if (!editor) return;
+    const permissions = editor.permissions.includes(perm)
+      ? editor.permissions.filter((p) => p !== perm)
+      : [...editor.permissions, perm];
+    setEditor({ ...editor, permissions });
+  };
+
   return (
     <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h5">Roles</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setNewName('')}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setEditor({ role: null, name: '', permissions: [] })}
+        >
           New role
         </Button>
       </Box>
@@ -79,24 +114,30 @@ export default function RolesPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>Permissions</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {roles.map((role) => (
               <TableRow key={role.id}>
+                <TableCell>{role.name}</TableCell>
                 <TableCell>
-                  {role.name}
-                  {role.name === 'ADMIN' && (
-                    <Chip label="built-in, full access" size="small" color="primary" sx={{ ml: 1 }} />
-                  )}
+                  {role.permissions.length === 0
+                    ? '—'
+                    : role.permissions.map((perm) => (
+                        <Chip key={perm} label={perm} size="small" sx={{ mr: 0.5 }} />
+                      ))}
                 </TableCell>
                 <TableCell align="right">
                   <IconButton
-                    onClick={() => remove(role)}
-                    disabled={role.name === 'ADMIN'}
-                    title={role.name === 'ADMIN' ? 'The ADMIN role cannot be deleted' : 'Delete role'}
+                    onClick={() =>
+                      setEditor({ role, name: role.name, permissions: [...role.permissions] })
+                    }
                   >
+                    <EditIcon />
+                  </IconButton>
+                  <IconButton onClick={() => remove(role)}>
                     <DeleteIcon />
                   </IconButton>
                 </TableCell>
@@ -106,28 +147,53 @@ export default function RolesPage() {
         </Table>
       </Paper>
       <Typography color="text.secondary" sx={{ mt: 2 }} variant="body2">
-        A role by itself grants nothing: assign it to users on the Users page, then grant it
-        READ/WRITE per repository via the shield icon on the Repositories page. ADMIN is the only
-        built-in role and always has full access.
+        A role is a named set of atomic permissions. It has effect only when assigned to a user
+        on a specific repository (shield icon on the Repositories page). Multiple roles on the
+        same repository sum their permissions.
       </Typography>
 
-      <Dialog open={newName !== null} onClose={() => setNewName(null)} fullWidth maxWidth="xs">
-        <DialogTitle>New role</DialogTitle>
-        <DialogContent>
-          <TextField
-            label="Name"
-            fullWidth
-            margin="normal"
-            value={newName ?? ''}
-            onChange={(e) => setNewName(e.target.value)}
-            helperText="2–64 chars: latin letters, digits, dash, underscore (e.g. DEVELOPER, CI_BOT, TEAM_PAYMENTS)"
-            autoFocus
-          />
-        </DialogContent>
+      <Dialog open={editor !== null} onClose={() => setEditor(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{editor?.role ? `Edit ${editor.role.name}` : 'New role'}</DialogTitle>
+        {editor && (
+          <DialogContent>
+            {editor.role === null && (
+              <TextField
+                label="Name"
+                fullWidth
+                margin="normal"
+                value={editor.name}
+                onChange={(e) => setEditor({ ...editor, name: e.target.value })}
+                helperText="e.g. developer, ci_runner, repo_admin"
+                autoFocus
+              />
+            )}
+            <Typography variant="subtitle2" sx={{ mt: 1 }}>
+              Permissions
+            </Typography>
+            <FormGroup>
+              {ALL_PERMISSIONS.map((perm) => (
+                <FormControlLabel
+                  key={perm}
+                  control={
+                    <Checkbox
+                      checked={editor.permissions.includes(perm)}
+                      onChange={() => togglePermission(perm)}
+                    />
+                  }
+                  label={`${perm} — ${PERMISSION_HINTS[perm]}`}
+                />
+              ))}
+            </FormGroup>
+          </DialogContent>
+        )}
         <DialogActions>
-          <Button onClick={() => setNewName(null)}>Cancel</Button>
-          <Button variant="contained" onClick={create} disabled={!newName || newName.trim().length < 2}>
-            Create
+          <Button onClick={() => setEditor(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={save}
+            disabled={!editor || (editor.role === null && editor.name.trim().length < 2)}
+          >
+            Save
           </Button>
         </DialogActions>
       </Dialog>
