@@ -58,10 +58,14 @@ async def _rescan_loop() -> None:
     while True:
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=settings.rescan_max_age_days)
+            # UNKNOWN проверяется при каждом обходе (это «не имеет валидного вердикта»),
+            # CLEAN — только если скан старше rescan_max_age_days
             stale_ids = await PackageVersion.filter(
-                quarantine_status__in=[QuarantineStatus.UNKNOWN, QuarantineStatus.CLEAN]
-            ).filter(
-                Q(last_scanned_at__isnull=True) | Q(last_scanned_at__lt=cutoff)
+                Q(quarantine_status=QuarantineStatus.UNKNOWN)
+                | (
+                    Q(quarantine_status=QuarantineStatus.CLEAN)
+                    & (Q(last_scanned_at__isnull=True) | Q(last_scanned_at__lt=cutoff))
+                )
             ).values_list("id", flat=True)
             if stale_ids:
                 logger.info("Rescan: queueing %d package versions", len(stale_ids))

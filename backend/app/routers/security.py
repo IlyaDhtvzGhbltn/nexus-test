@@ -142,6 +142,7 @@ async def delete_whitelist_rule(rule_id: int, actor: User = Depends(require_supe
     ).values_list("id", flat=True)
     if ids:
         await PackageVersion.filter(id__in=ids).update(
-            quarantine_status=QuarantineStatus.UNKNOWN
+            quarantine_status=QuarantineStatus.UNKNOWN,
+            last_scanned_at=None,  # на перепроверку при ближайшем обходе
         )
     await log_operator(actor, "whitelist.remove", f"{rule.package_name}@{rule.version}")

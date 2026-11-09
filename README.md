@@ -356,6 +356,12 @@ npm view hello-pkg --registry http://localhost:8000/npm/npm-internal/
 
 ### Если что-то пошло не так
 
+- **podman-compose и jobber**: podman-compose может проигнорировать
+  `dockerfile: Dockerfile.jobber` (общий контекст с backend) и собрать jobber
+  из основного Dockerfile — тогда в `podman logs test_jobber_1` виден uvicorn
+  вместо `Jobber started`. Лечение — собрать образ вручную и пересоздать сервис:
+  `podman build -t localhost/test_jobber:latest -f backend/Dockerfile.jobber backend`,
+  затем `python -m podman_compose up -d --no-build jobber`.
 - Логи бэкенда: `docker compose logs backend`
 - Проверка, что API живо: http://localhost:8000/api/health → `{"status":"ok"}`
 - Список эндпоинтов — в таблице «Реализованные эндпоинты npm Registry» выше
