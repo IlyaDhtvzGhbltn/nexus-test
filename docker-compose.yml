@@ -71,9 +71,8 @@ services:
         condition: service_healthy
 
   jobber:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.jobber
+    build: ./backend                  # тот же образ, что backend
+    command: ["python", "-m", "app.jobber.main"]
     environment:
       DATABASE_URL: postgres://artifact:artifact@db:5432/artifact_repo
       STORAGE_PROVIDER: minio
