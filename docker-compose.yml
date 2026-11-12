@@ -1,16 +1,17 @@
+# Секреты — в файле .env рядом с этим файлом (шаблон: .env.example, в git не попадает)
 services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: artifact
-      POSTGRES_PASSWORD: artifact
-      POSTGRES_DB: artifact_repo
+      POSTGRES_USER: ${POSTGRES_USER:-artifact}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-artifact_repo}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U artifact -d artifact_repo"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artifact} -d ${POSTGRES_DB:-artifact_repo}"]
       interval: 3s
       timeout: 3s
       retries: 15
@@ -19,8 +20,8 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # веб-консоль MinIO
@@ -34,9 +35,12 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
     ports:
       - "5672:5672"    # AMQP
-      - "15672:15672"  # веб-консоль RabbitMQ (guest/guest)
+      - "15672:15672"  # веб-консоль RabbitMQ
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -46,18 +50,18 @@ services:
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: postgres://artifact:artifact@db:5432/artifact_repo
-      JWT_SECRET: dev-only-secret-change-me-0123456789abcdef
+      DATABASE_URL: postgres://${POSTGRES_USER:-artifact}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-artifact_repo}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       STORAGE_PROVIDER: minio         # общий склад: все ноды бэкенда видят одни файлы
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: artifacts
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       CORS_ORIGINS: http://localhost:5173
-      INITIAL_ADMIN_LOGIN: admin
-      # Обязательно поменяйте: без пароля длиной >=12 суперадмин не будет создан
-      INITIAL_ADMIN_PASSWORD: ChangeMe-Please-123
+      INITIAL_ADMIN_LOGIN: ${INITIAL_ADMIN_LOGIN:-admin}
+      # Без пароля длиной >=12 суперадмин не будет создан
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?set INITIAL_ADMIN_PASSWORD in .env}
     ports:
       - "8000:8000"
     volumes:
@@ -74,13 +78,13 @@ services:
     build: ./backend                  # тот же образ, что backend
     command: ["python", "-m", "app.jobber.main"]
     environment:
-      DATABASE_URL: postgres://artifact:artifact@db:5432/artifact_repo
+      DATABASE_URL: postgres://${POSTGRES_USER:-artifact}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-artifact_repo}
       STORAGE_PROVIDER: minio
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: artifacts
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       QUARANTINE_SEVERITIES: CRITICAL,HIGH
       RESCAN_INTERVAL_HOURS: "24"
       RESCAN_MAX_AGE_DAYS: "7"

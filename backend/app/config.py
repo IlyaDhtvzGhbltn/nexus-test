@@ -6,7 +6,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Конфигурация приложения. Все значения переопределяются переменными окружения."""
 
-    database_url: str = "postgres://artifact:artifact@localhost:5432/artifact_repo"
+    # Обязателен (env DATABASE_URL) — дефолта с учётными данными нет намеренно
+    database_url: str = ""
 
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"

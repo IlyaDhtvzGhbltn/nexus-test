@@ -4,6 +4,12 @@ from app.config import get_settings
 
 settings = get_settings()
 
+if not settings.database_url:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Provide it via environment "
+        "(docker-compose reads it from .env, see .env.example)."
+    )
+
 _models = ["app.models"]
 # aerich нужен только для миграций; приложение работает и без него
 if importlib.util.find_spec("aerich") is not None:
