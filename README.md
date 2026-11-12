@@ -223,6 +223,43 @@ API: `GET/POST /api/security/versions...`, `GET/POST/DELETE /api/security/whitel
 - `local` — диск текущей ноды (`app/storage/local.py`), годится для простого
   запуска в один бэкенд без MinIO.
 
+## Тесты
+
+Интеграционные тесты лежат в `backend/tests/` (pytest). Postgres и Docker для
+основного набора **не нужны**: база — одноразовый SQLite, upstream npm-реестра —
+фейковый сервер на локальном порту.
+
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
+- `test_api_flow.py` — сквозной сценарий (~20 тестов, ~2 мин): RBAC (права,
+  суммирование ролей, политика перезаписи), npm-протокол (publish/packument/
+  tarball/scoped/поиск), прокси (стриминг, single-flight, офлайн-кэш), карантин
+  и whitelist, оба журнала аудита, защиты суперадмина. Тесты в файле
+  последовательные — запускать файлом, не поодиночке.
+- `test_jobber_pipeline.py` — полный конвейер карантина (RabbitMQ + настоящий
+  Trivy): события, аудит через очередь, скан уязвимого lodash@4.17.20 →
+  QUARANTINED. Автоматически **пропускается**, если не задано окружение:
+
+```bash
+podman run -d --name rabbit-test -p 5673:5672 rabbitmq:4-alpine
+```
+
+```
+set RABBITMQ_URL=amqp://guest:guest@localhost:5673/   (trivy должен быть в PATH
+или задайте TRIVY_PATH; первый запуск качает базу уязвимостей — нужен интернет)
+pytest
+```
+
+Прогон против настоящего MinIO вместо локального хранилища:
+`STORAGE_PROVIDER=minio` + `MINIO_ENDPOINT=http://localhost:9000` перед pytest.
+
+Рекомендация для CI: основной набор — на каждый коммит, конвейерный — ночью
+или перед релизом.
+
 ## Миграции
 
 Для MVP схема создаётся при старте (`generate_schemas`).
