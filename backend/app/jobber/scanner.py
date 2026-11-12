@@ -31,6 +31,25 @@ logger = logging.getLogger(__name__)
 MAX_FINDINGS_STORED = 100
 
 
+def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
+    """Распаковка с защитой от path traversal.
+    """
+    try:
+        tf.extractall(dest, filter="data")
+        return
+    except TypeError:
+        pass
+    members = []
+    for member in tf.getmembers():
+        parts = Path(member.name).parts
+        if member.name.startswith(("/", "\\")) or ".." in parts:
+            continue  # попытка выйти за пределы каталога
+        if member.issym() or member.islnk():
+            continue  # ссылки могут указывать наружу
+        members.append(member)
+    tf.extractall(dest, members=members)
+
+
 def _synthetic_lockfile(name: str, version: str) -> dict:
     """Минимальный package-lock.json v3: пакет с точной версией для базы Trivy."""
     return {
@@ -110,7 +129,7 @@ async def scan_package_version(pv_id: int) -> str | None:
             content_dir.mkdir()
             try:
                 with tarfile.open(tgz_path, "r:gz") as tf:
-                    tf.extractall(content_dir, filter="data")  # защита от traversal
+                    _safe_extract(tf, content_dir)
             except (tarfile.TarError, OSError) as exc:
                 logger.warning("Cannot extract %s: %s — scanning lockfile only", label, exc)
             tgz_path.unlink()

@@ -6,7 +6,9 @@
 
 ## Стек
 
-- **Backend:** Python 3.12, FastAPI, Tortoise-ORM (async), PyJWT, httpx
+- **Backend:** Python 3.11+, FastAPI, Tortoise-ORM (async), PyJWT, httpx;
+  образы backend/jobber собираются на базе **Astra Linux** (ubi18),
+  фронтенд раздаёт **Angie** (форк nginx)
 - **Database:** PostgreSQL 16 (пользователи, RBAC, метаданные пакетов: name/version/dependencies)
 - **Frontend:** React 18 + Vite + TypeScript + MUI
 - **Blob storage:** абстракция `IStorageProvider`, реализация `LocalStorageProvider` (локальный диск)
