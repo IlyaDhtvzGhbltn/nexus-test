@@ -97,16 +97,12 @@ services:
         condition: service_healthy
 
   frontend:
+    # Статика, собранная при build образа, раздаётся Angie; он же проксирует
+    # /api и /npm на backend. Для разработки с hot-reload запускайте Vite
+    # локально: cd frontend && npm run dev (dev-proxy настроен в vite.config.ts)
     build: ./frontend
-    environment:
-      # Vite dev-proxy направляет /api, /hosted, /proxy на этот адрес
-      VITE_PROXY_TARGET: http://backend:8000
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/index.html:/app/index.html
-      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - "5173:80"
     depends_on:
       - backend
 
