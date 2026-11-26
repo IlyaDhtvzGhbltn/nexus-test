@@ -48,6 +48,7 @@ services:
       retries: 15
 
   backend:
+    image: ${BACKEND_IMAGE:-rep-manager/backend:dev}
     build: ./backend
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-artifact}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-artifact_repo}
@@ -75,6 +76,7 @@ services:
         condition: service_healthy
 
   jobber:
+    image: ${BACKEND_IMAGE:-rep-manager/backend:dev}
     build: ./backend                  # тот же образ, что backend
     command: ["python", "-m", "app.jobber.main"]
     environment:
@@ -104,9 +106,10 @@ services:
     # Статика, собранная при build образа, раздаётся Angie; он же проксирует
     # /api и /npm на backend. Для разработки с hot-reload запускайте Vite
     # локально: cd frontend && npm run dev (dev-proxy настроен в vite.config.ts)
+    image: ${FRONTEND_IMAGE:-rep-manager/frontend:dev}
     build: ./frontend
     ports:
-      - "5173:80"
+      - "${UI_PORT:-5173}:80"
     depends_on:
       - backend
 

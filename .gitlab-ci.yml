@@ -1,0 +1,59 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  HARBOR_HOST: codd-harbor.mos.ru
+  BACKEND_IMAGE: ${HARBOR_HOST}/${HARBOR_NAMESPACE}/rep-manager-backend:${CI_COMMIT_SHORT_SHA}
+  FRONTEND_IMAGE: ${HARBOR_HOST}/${HARBOR_NAMESPACE}/rep-manager-frontend:${CI_COMMIT_SHORT_SHA}
+
+default:
+  tags:
+    - rep_manager_runner
+
+# -------- Тесты--------
+test:
+  stage: test
+  image: python:3.11-slim
+  variables:
+    # pip через внутренний Nexus, если там есть pypi-зеркало; иначе убрать
+    PIP_INDEX_URL: ${PIP_INDEX_URL}
+  script:
+    - cd backend
+    - pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+    - pytest
+
+# -------- Сборка и публикация в Harbor --------
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+    - docker build -t "$BACKEND_IMAGE" backend
+    - docker build --build-arg NPM_REGISTRY="$NPM_REGISTRY" -t "$FRONTEND_IMAGE" frontend
+    - docker push "$BACKEND_IMAGE"
+    - docker push "$FRONTEND_IMAGE"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# -------- Деплой: compose на релизной машине --------
+deploy:
+  stage: deploy
+  image: docker:27
+  variables:
+    COMPOSE_PROJECT_NAME: rep-manager
+    UI_PORT: "80"
+  script:
+    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+    - docker compose pull db minio rabbitmq backend jobber frontend
+    - docker compose up -d --no-build --remove-orphans
+    - docker compose ps
+  environment:
+    name: test-machine
+    url: http://10.176.40.113
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

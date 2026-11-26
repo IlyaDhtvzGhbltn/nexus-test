@@ -6,8 +6,9 @@ WORKDIR /opt/app
 RUN chown node:node /opt/app
 USER node
 
+ARG NPM_REGISTRY=https://registry.npmjs.org
 COPY --chown=node:node package*.json ./
-RUN npm ci
+RUN npm ci --registry=${NPM_REGISTRY}
 
 # Файлы для сборки перечислены явно (вместо «COPY . .» — копирования всей
 # папки целиком, которое может утащить в образ лишнее; SonarQube)
