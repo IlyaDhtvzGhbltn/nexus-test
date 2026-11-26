@@ -19,7 +19,7 @@ test:
   image: ${MIRROR}/python:3.11-slim
   script:
     - cd backend
-    - pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt -r requirements-dev.txt
+    - pip install --no-cache-dir --index-url "$PYPI_REGISTRY" -r requirements.txt -r requirements-dev.txt
     - pytest
 
 # -------- Сборка и публикация образов в Harbor --------
@@ -36,7 +36,7 @@ build:
     - docker build
         --build-arg BASE_IMAGE=${MIRROR}/astra/ubi18:1.8.7
         --build-arg TRIVY_IMAGE=${MIRROR}/aquasec/trivy:0.76.1
-        --build-arg PIP_INDEX_URL="$PIP_INDEX_URL"
+        --build-arg PIP_INDEX_URL="$PYPI_REGISTRY"
         -t "$BACKEND_IMAGE" backend
     - docker build
         --build-arg NODE_IMAGE=${MIRROR}/node:24-alpine
