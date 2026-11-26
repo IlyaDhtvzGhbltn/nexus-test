@@ -21,21 +21,24 @@ test:
   stage: test
   script:
     - *harbor_login
+    # зеркало pypi требует авторизацию — вставляем логин:пароль нексуса в URL
+    - PYPI_URL="$(echo "$PYPI_REGISTRY" | sed "s#^https://#https://${NEXUS_USERNAME}:${NEXUS_PASSWORD}@#")"
     - docker run --rm
         -v "$CI_PROJECT_DIR/backend:/work" -w /work
-        -e PYPI_REGISTRY="$PYPI_REGISTRY"
+        -e PIP_INDEX_URL="$PYPI_URL"
         "${MIRROR}/python:3.11-slim"
-        sh -c 'pip install --no-cache-dir --index-url "$PYPI_REGISTRY" -r requirements.txt -r requirements-dev.txt && pytest'
+        sh -c 'pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt && pytest'
 
 # -------- Сборка и публикация образов в Harbor --------
 build:
   stage: build
   script:
     - *harbor_login
+    - PYPI_URL="$(echo "$PYPI_REGISTRY" | sed "s#^https://#https://${NEXUS_USERNAME}:${NEXUS_PASSWORD}@#")"
     - docker build
         --build-arg BASE_IMAGE="${MIRROR}/astra/ubi18:1.8.7"
         --build-arg TRIVY_IMAGE="${MIRROR}/aquasec/trivy:0.76.1"
-        --build-arg PIP_INDEX_URL="$PYPI_REGISTRY"
+        --build-arg PIP_INDEX_URL="$PYPI_URL"
         -t "$BACKEND_IMAGE" backend
     - docker build
         --build-arg NODE_IMAGE="${MIRROR}/node:24-alpine"
