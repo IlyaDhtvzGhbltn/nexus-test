@@ -1,6 +1,9 @@
+ARG NODE_IMAGE=docker.io/library/node:24-alpine
+ARG ANGIE_IMAGE=docker.angie.software/angie:minimal
+
 # --- Этап 1: сборка статики (Node нужен только здесь, в рантайм не попадает) ---
 # node:24 — ветки до 22 уязвимы к Node2Shell
-FROM node:24-alpine AS build-stage
+FROM ${NODE_IMAGE} AS build-stage
 
 WORKDIR /opt/app
 RUN chown node:node /opt/app
@@ -20,7 +23,7 @@ RUN npm run build
 # Мастер-процесс Angie стартует от root (стандартная модель nginx: root открывает
 # порт и читает конфиг), рабочие процессы, обслуживающие запросы, — от
 # непривилегированного пользователя angie.
-FROM docker.angie.software/angie:minimal
+FROM ${ANGIE_IMAGE}
 
 COPY --from=build-stage /opt/app/dist /usr/share/angie/html
 COPY angie.conf /etc/angie/http.d/default.conf

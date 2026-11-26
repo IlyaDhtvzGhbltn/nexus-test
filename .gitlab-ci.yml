@@ -5,6 +5,7 @@ stages:
 
 variables:
   HARBOR_HOST: codd-harbor.mos.ru
+  MIRROR: ${HARBOR_HOST}/baseimages
   BACKEND_IMAGE: ${HARBOR_HOST}/${HARBOR_NAMESPACE}/rep-manager-backend:${CI_COMMIT_SHORT_SHA}
   FRONTEND_IMAGE: ${HARBOR_HOST}/${HARBOR_NAMESPACE}/rep-manager-frontend:${CI_COMMIT_SHORT_SHA}
 
@@ -15,40 +16,51 @@ default:
 # -------- Тесты--------
 test:
   stage: test
-  image: python:3.11-slim
-  variables:
-    # pip через внутренний Nexus, если там есть pypi-зеркало; иначе убрать
-    PIP_INDEX_URL: ${PIP_INDEX_URL}
+  image: ${MIRROR}/python:3.11-slim
   script:
     - cd backend
-    - pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+    - pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt -r requirements-dev.txt
     - pytest
 
-# -------- Сборка и публикация в Harbor --------
+# -------- Сборка и публикация образов в Harbor --------
 build:
   stage: build
-  image: docker:27
+  image: ${MIRROR}/docker:27
   services:
-    - docker:27-dind
+    - name: ${MIRROR}/docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
   script:
     - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
-    - docker build -t "$BACKEND_IMAGE" backend
-    - docker build --build-arg NPM_REGISTRY="$NPM_REGISTRY" -t "$FRONTEND_IMAGE" frontend
+    - docker build
+        --build-arg BASE_IMAGE=${MIRROR}/astra/ubi18:1.8.7
+        --build-arg TRIVY_IMAGE=${MIRROR}/aquasec/trivy:0.76.1
+        --build-arg PIP_INDEX_URL="$PIP_INDEX_URL"
+        -t "$BACKEND_IMAGE" backend
+    - docker build
+        --build-arg NODE_IMAGE=${MIRROR}/node:24-alpine
+        --build-arg ANGIE_IMAGE=${MIRROR}/angie:minimal
+        --build-arg NPM_REGISTRY="$NPM_REGISTRY"
+        -t "$FRONTEND_IMAGE" frontend
     - docker push "$BACKEND_IMAGE"
     - docker push "$FRONTEND_IMAGE"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# -------- Деплой: compose на релизной машине --------
+# -------- Деплой: compose на релизной машине--------
 deploy:
   stage: deploy
-  image: docker:27
+  image: ${MIRROR}/docker:27
   variables:
     COMPOSE_PROJECT_NAME: rep-manager
     UI_PORT: "80"
+    POSTGRES_IMAGE: ${MIRROR}/postgres:16-alpine3.20
+    RABBITMQ_IMAGE: ${MIRROR}/rabbitmq:4.3.2-management-alpine
+    MINIO_IMAGE: ${MIRROR}/minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
   script:
     - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
-    - docker compose pull db minio rabbitmq backend jobber frontend
+    - docker compose pull
     - docker compose up -d --no-build --remove-orphans
     - docker compose ps
   environment:
