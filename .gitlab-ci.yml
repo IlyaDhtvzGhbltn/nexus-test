@@ -13,34 +13,33 @@ default:
   tags:
     - rep_manager_runner
 
-# -------- Тесты--------
+.harbor_login: &harbor_login
+  - echo "$HARBOR_PASSWORD" | docker login -u "$HARBOR_USERNAME" --password-stdin "$HARBOR_HOST"
+
+# -------- Тесты ----
 test:
   stage: test
-  image: ${MIRROR}/python:3.11-slim
   script:
-    - cd backend
-    - pip install --no-cache-dir --index-url "$PYPI_REGISTRY" -r requirements.txt -r requirements-dev.txt
-    - pytest
+    - *harbor_login
+    - docker run --rm
+        -v "$CI_PROJECT_DIR/backend:/work" -w /work
+        -e PYPI_REGISTRY="$PYPI_REGISTRY"
+        "${MIRROR}/python:3.11-slim"
+        sh -c 'pip install --no-cache-dir --index-url "$PYPI_REGISTRY" -r requirements.txt -r requirements-dev.txt && pytest'
 
 # -------- Сборка и публикация образов в Harbor --------
 build:
   stage: build
-  image: ${MIRROR}/docker:27
-  services:
-    - name: ${MIRROR}/docker:27-dind
-      alias: docker
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
   script:
-    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+    - *harbor_login
     - docker build
-        --build-arg BASE_IMAGE=${MIRROR}/astra/ubi18:1.8.7
-        --build-arg TRIVY_IMAGE=${MIRROR}/aquasec/trivy:0.76.1
+        --build-arg BASE_IMAGE="${MIRROR}/astra/ubi18:1.8.7"
+        --build-arg TRIVY_IMAGE="${MIRROR}/aquasec/trivy:0.76.1"
         --build-arg PIP_INDEX_URL="$PYPI_REGISTRY"
         -t "$BACKEND_IMAGE" backend
     - docker build
-        --build-arg NODE_IMAGE=${MIRROR}/node:24-alpine
-        --build-arg ANGIE_IMAGE=${MIRROR}/angie:minimal
+        --build-arg NODE_IMAGE="${MIRROR}/node:24-alpine"
+        --build-arg ANGIE_IMAGE="${MIRROR}/angie:minimal"
         --build-arg NPM_REGISTRY="$NPM_REGISTRY"
         -t "$FRONTEND_IMAGE" frontend
     - docker push "$BACKEND_IMAGE"
@@ -48,10 +47,9 @@ build:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# -------- Деплой: compose на релизной машине--------
+# -------- Деплой: compose на этой же машине --------
 deploy:
   stage: deploy
-  image: ${MIRROR}/docker:27
   variables:
     COMPOSE_PROJECT_NAME: rep-manager
     UI_PORT: "80"
@@ -59,7 +57,7 @@ deploy:
     RABBITMQ_IMAGE: ${MIRROR}/rabbitmq:4.3.2-management-alpine
     MINIO_IMAGE: ${MIRROR}/minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
   script:
-    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+    - *harbor_login
     - docker compose pull
     - docker compose up -d --no-build --remove-orphans
     - docker compose ps
