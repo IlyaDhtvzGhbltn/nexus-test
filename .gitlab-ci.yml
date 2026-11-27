@@ -67,6 +67,7 @@ deploy:
     - docker compose pull
     - docker compose up -d --no-build --remove-orphans
     - docker compose ps
+    - docker image prune -f
   environment:
     name: test-machine
     url: http://10.176.40.113
