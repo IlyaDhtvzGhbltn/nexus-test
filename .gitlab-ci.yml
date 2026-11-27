@@ -24,10 +24,13 @@ test:
     # зеркало pypi требует авторизацию — вставляем логин:пароль нексуса в URL
     - PYPI_URL="$(echo "$PYPI_REGISTRY" | sed "s#^https://#https://${NEXUS_USERNAME}:${NEXUS_PASSWORD}@#")"
     - docker run --rm
+        -u "$(id -u):$(id -g)"
         -v "$CI_PROJECT_DIR/backend:/work" -w /work
         -e PIP_INDEX_URL="$PYPI_URL"
+        -e HOME=/tmp
+        -e PYTHONDONTWRITEBYTECODE=1
         "${MIRROR}/python:3.11-slim"
-        sh -c 'pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt && pytest'
+        sh -c 'python -m venv /tmp/venv && /tmp/venv/bin/pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt && /tmp/venv/bin/pytest -p no:cacheprovider'
 
 # -------- Сборка и публикация образов в Harbor --------
 build:
