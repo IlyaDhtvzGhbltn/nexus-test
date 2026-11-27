@@ -39,7 +39,7 @@ build:
     - *harbor_login
     - PYPI_URL="$(echo "$PYPI_REGISTRY" | sed "s#^https://#https://${NEXUS_USERNAME}:${NEXUS_PASSWORD}@#")"
     - docker build
-        --build-arg BASE_IMAGE="${MIRROR}/astra/ubi18:1.8.7"
+        --build-arg BASE_IMAGE="${HARBOR_HOST}/repository_manager/astra-python:1.8.7"
         --build-arg TRIVY_IMAGE="${MIRROR}/aquasec/trivy:0.76.1"
         --build-arg PIP_INDEX_URL="$PYPI_URL"
         -t "$BACKEND_IMAGE" backend
