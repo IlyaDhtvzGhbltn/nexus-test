@@ -43,10 +43,12 @@ build:
         --build-arg TRIVY_IMAGE="${MIRROR}/aquasec/trivy:0.76.1"
         --build-arg PIP_INDEX_URL="$PYPI_URL"
         -t "$BACKEND_IMAGE" backend
+    - NPM_AUTH="$(printf '%s:%s' "$NEXUS_USERNAME" "$NEXUS_PASSWORD" | base64 -w0)"
     - docker build
         --build-arg NODE_IMAGE="${MIRROR}/node:24-alpine"
         --build-arg ANGIE_IMAGE="${MIRROR}/angie:minimal"
         --build-arg NPM_REGISTRY="$NPM_REGISTRY"
+        --build-arg NPM_AUTH="$NPM_AUTH"
         -t "$FRONTEND_IMAGE" frontend
     - docker push "$BACKEND_IMAGE"
     - docker push "$FRONTEND_IMAGE"

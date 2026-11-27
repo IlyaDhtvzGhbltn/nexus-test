@@ -10,8 +10,15 @@ RUN chown node:node /opt/app
 USER node
 
 ARG NPM_REGISTRY=https://registry.npmjs.org
+# base64 от "логин:пароль"
+ARG NPM_AUTH=""
 COPY --chown=node:node package*.json ./
-RUN npm ci --registry=${NPM_REGISTRY}
+RUN printf 'registry=%s\n' "$NPM_REGISTRY" > .npmrc \
+    && if [ -n "$NPM_AUTH" ]; then \
+         printf '%s:_auth=%s\nalways-auth=true\n' "${NPM_REGISTRY#https:}" "$NPM_AUTH" >> .npmrc; \
+       fi \
+    && npm ci \
+    && rm -f .npmrc
 
 # Файлы для сборки перечислены явно (вместо «COPY . .» — копирования всей
 # папки целиком, которое может утащить в образ лишнее; SonarQube)
